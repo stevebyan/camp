@@ -49,6 +49,11 @@ unchanged.
 
 @section[#:tag "qs-building"]{Building and Previewing}
 
+As detailed later in @secref["basic-concepts"], a Camp site is a Racket package. Before you can build
+the site, you must install it:
+
+@terminal{@:>{raco pkg install}}
+
 Build the site with:
 
 @terminal{@:>{raco camp build}}
@@ -84,7 +89,8 @@ This is equivalent to running @tt{raco camp build} from within the site director
 You now have a working Camp site. The generated template is intentionally minimal---it's meant as a
 starting point, not a finished design.
 
-To understand how the pieces fit together and customize your site, continue to
+Continue to @secref["basic-concepts"] to learn the basic concepts behind Camp.
+Then to understand how the pieces fit together and customize your site, continue with
 @secref["tutorial-blog"], which walks through building a blog from scratch. You'll learn how to
 configure collections, write render functions, and generate feeds. The @secref["reference"] section
 provides complete documentation of Camp's modules and functions when you need to look something up.
