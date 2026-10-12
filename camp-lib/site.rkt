@@ -4,11 +4,12 @@
   (require splitflap/constructs
            gregor
            racket/match
+           (only-in tzinfo tzid-exists?)
            (only-in camp/private/path-map
                     source-path-pattern?
                     output-path-pattern?
                     non-rkt-file-extension?))
-  (provide author-string? feed-filename? render-spec?)
+  (provide author-string? feed-filename? render-spec? timezone-name?)
 
   (define (author-string? s) ; "Name (email)" format
     (match s
@@ -18,6 +19,9 @@
 
   (define (feed-filename? v)
     (and (string? v) (regexp-match? #px"\\.(?:atom|rss)$" v)))
+
+  (define (timezone-name? v)
+    (and (string? v) (tzid-exists? v)))
 
   ; This validator does it all in one shot rather than daisy-chaining with
   ; readable-datum? in the schema, so we can document it more easily
@@ -35,6 +39,7 @@
    [url valid-url-string? required]
    [founded date-provider? required]
    [authors (listof author-string?) required]
+   [timezone timezone-name? (optional #f)]
    [sources non-rkt-file-extension? (optional ".md.rkt")]
    [static-folder path-string? (optional "static")]
    [output-folder path-string? (optional "publish")]
@@ -58,4 +63,4 @@
     optional]))
 
 (require 'reader)
-(provide author-string? feed-filename? render-spec?)
+(provide author-string? feed-filename? render-spec? timezone-name?)

@@ -6,8 +6,9 @@
                "hash-view-lib"
                "html-printer-lib"
                "punct-lib"
-               "splitflap-lib"
+               ["splitflap-lib" #:version "1.4.1"]
                "toml-config-lib"
+               "tzinfo"
                "web-server-lib"))
 (define pkg-desc "Implementation part of Camp")
 (define version "1.0")

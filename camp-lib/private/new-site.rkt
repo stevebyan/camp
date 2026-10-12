@@ -23,7 +23,7 @@
 (define (gen-site.rkt name title author founded)
   (include-template "template/site.rkt.txt"))
 
-(define (gen-render.rkt name)
+(define (gen-render.rkt title)
   (include-template "template/render.rkt.txt"))
 
 (define (gen-main.rkt name)
@@ -64,7 +64,7 @@
     #:exists 'error)
 
   (call-with-output-file (build-path target-dir "render.rkt")
-    (λ (out) (display (gen-render.rkt name) out))
+    (λ (out) (display (gen-render.rkt title) out))
     #:exists 'error)
 
   (call-with-output-file (build-path target-dir "main.rkt")

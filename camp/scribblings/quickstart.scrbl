@@ -35,8 +35,9 @@ site called ``mysite'' by running:
 @:>{raco camp new mysite}
 @sandbox-raco{camp new mysite}}
 
-This creates a @filepath{mysite} directory containing everything you need: a site configuration, a
-sample blog post, a simple render module, basic CSS, and package metadata. Change into the new
+This creates a @filepath{mysite} directory containing everything you need: a site configuration, two
+sample blog posts that demonstrate @seclink["mod-xref"]{cross-references}, a simple render
+module, a stylesheet with light and dark modes, and package metadata. Change into the new
 directory to explore what was created:
 
 @terminal{@:>{cd mysite}}

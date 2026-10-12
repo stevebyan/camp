@@ -53,6 +53,8 @@
 (define marker-file
   (build-path test-site-dir "publish" ".deploy-marker"))
 
+;; deploy does not build, and a fresh checkout has no output folder
+(make-directory* (path-only marker-file))
 (when (file-exists? marker-file)
   (delete-file marker-file))
 

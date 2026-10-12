@@ -2,7 +2,9 @@
 
 ;; Tests for the in-app editor's pure helpers
 
-(require rackunit
+(require racket/list
+         racket/string
+         rackunit
          rackunit/text-ui
          camp/app/private/editor-utils)
 
@@ -86,6 +88,20 @@
      (check-equal? (fill-unit (vector "- one" "- two aaa bbb" "- three") 1 7)
                    (list 1 1 "- two\n  aaa\n  bbb")))
 
+   (test-case "fill-unit treats a wrapped number other than 1 as paragraph text"
+     (define para (vector "The right wing didn't care before" "2018. Then my district elected"))
+     (check-equal? (fill-unit para 1 80)
+                   (list 0 1 "The right wing didn't care before 2018. Then my district elected"))
+     (check-equal? (fill-unit (vector "aaa bbb" "2018. ccc ddd") 1 9)
+                   (list 0 1 "aaa bbb\n2018. ccc\nddd"))
+     (check-equal? (auto-filled '("aaa" "2018. ccc ddd") 1 9) "2018. ccc\nddd"))
+
+   (test-case "fill-unit still splits at markers that can interrupt a paragraph"
+     (check-equal? (fill-unit (vector "aaa" "1. bbb") 1 80) (list 1 1 "1. bbb"))
+     (check-equal? (fill-unit (vector "aaa" "- bbb") 1 80) (list 1 1 "- bbb"))
+     (check-equal? (fill-unit (vector "1. aaa" "2. bbb ccc") 1 7) (list 1 1 "2. bbb\n   ccc"))
+     (check-equal? (fill-unit (vector "aaa" "" "7. bbb ccc") 2 7) (list 2 2 "7. bbb\n   ccc")))
+
    (test-case "fill-unit from a continuation line fills the whole owning item"
      (check-equal? (fill-unit (vector "- aaa bbb" "lazy ccc") 1 20)
                    (list 0 1 "- aaa bbb lazy ccc")))
@@ -99,6 +115,15 @@
                    (list 0 0 "> aaa\n> bbb\n> ccc"))
      (check-equal? (fill-unit (vector "> - aaa bbb") 0 7)
                    (list 0 0 "> - aaa\n>   bbb")))
+
+   (test-case "boundaries hold inside a blockquote"
+     (define quoted (vector "> aaa bbb" ">" "> ccc" "> # ddd" "> eee"))
+     (check-equal? (fill-unit quoted 0 20) (list 0 0 "> aaa bbb"))
+     (check-equal? (fill-unit quoted 2 20) (list 2 2 "> ccc"))
+     (check-equal? (fill-unit quoted 4 20) (list 4 4 "> eee"))
+     (check-false (fill-unit quoted 1 20))
+     (check-false (fill-unit quoted 3 20))
+     (check-equal? (auto-filled '("> aaa bbb ccc" ">" "> ddd") 0 9) "> aaa bbb\n> ccc\n>\n> ddd"))
 
    (test-case "fill-unit on a plain paragraph matches fill-paragraph behavior"
      (check-equal? (fill-unit (vector "aaa bbb ccc ddd") 0 7)
@@ -119,7 +144,63 @@
    (test-case "fill-unit refuses the top metadata block but not the body"
      (define doc (vector "#lang punct" "" "---" "title: aaa bbb ccc ddd" "---" "" "body text"))
      (check-false (fill-unit doc 3 10))
-     (check-equal? (fill-unit doc 6 80) (list 6 6 "body text")))))
+     (check-equal? (fill-unit doc 6 80) (list 6 6 "body text")))
+
+   (test-case "auto-fill-edits breaks an overlong line where fill-unit would"
+     (for ([l (in-list '("aaa bbb ccc ddd" "- aaa bbb ccc ddd" "12. aaa bbb ccc"
+                         "  aaa bbb ccc" "> aaa bbb ccc" "> - aaa bbb ccc"
+                         "aa indivisible bb"))])
+       (check-equal? (apply-edits l (auto-fill-edits (vector l) 0 9))
+                     (third (fill-unit (vector l) 0 9))
+                     l)))
+
+   (test-case "auto-fill-edits lists whitespace runs rightmost first"
+     (check-equal? (auto-fill-edits (vector "> aaa bbb  ccc") 0 5)
+                   '((9 11 "\n> ") (5 6 "\n> "))))
+
+   (test-case "auto-fill-edits leaves lines that fit, and trailing space, alone"
+     (check-equal? (auto-fill-edits (vector "aaa bbb") 0 7) '())
+     (check-equal? (auto-fill-edits (vector "aaa bbb ") 0 7) '())
+     (check-equal? (auto-fill-edits (vector "indivisible") 0 5) '()))
+
+   (test-case "auto-fill-edits carries overflow onto the next line of the unit"
+     (check-equal? (auto-fill-edits (vector "aaa bbb ccc" "ddd") 0 7)
+                   '((11 12 " ") (7 8 "\n")))
+     (check-equal? (auto-filled '("aaa bbb ccc" "ddd eee") 0 7) "aaa bbb\nccc ddd\neee")
+     (check-equal? (auto-filled '("> aaa bbb ccc" "> ddd") 0 9) "> aaa bbb\n> ccc ddd")
+     (check-equal? (auto-filled '("- aaa bbb ccc" "  ddd") 0 9) "- aaa bbb\n  ccc ddd")
+     (check-equal? (auto-filled '("- aaa" "  bbb ccc ddd" "  eee") 1 9) "  bbb ccc\n  ddd eee"))
+
+   (test-case "auto-fill-edits stops carrying at the first line that fits"
+     (check-equal? (auto-filled '("aaa bbb ccc" "dd" "eee fff") 0 7) "aaa bbb\nccc dd\neee fff")
+     (check-equal? (auto-filled '("aaa bbb ccc" "ddddd" "ee") 0 7) "aaa bbb\nccc\nddddd\nee"))
+
+   (test-case "auto-fill-edits carries nothing past the unit or a hard break"
+     (for ([next (in-list '("" "- ddd" "# ddd" "> ddd"))])
+       (check-equal? (auto-filled (list "aaa bbb ccc" next) 0 7)
+                     (string-append "aaa bbb\nccc\n" next)))
+     (check-equal? (auto-filled '("aaa bbb ccc  " "ddd") 0 7) "aaa bbb\nccc  \nddd")
+     (check-equal? (auto-filled '("aaa bbb ccc\\" "ddd") 0 7) "aaa bbb\nccc\\\nddd"))
+
+   (test-case "position-after-edits keeps a caret at an edit's start in place"
+     (define edits '((11 12 " ") (7 8 "\n  ")))
+     (check-equal? (position-after-edits 7 edits) 7)
+     (check-equal? (position-after-edits 11 edits) 13)
+     (check-equal? (position-after-edits 12 edits) 14)
+     (check-equal? (position-after-edits 3 edits) 3))
+
+   (test-case "auto-fill-edits refuses what fill-unit refuses"
+     (check-equal? (auto-fill-edits (vector "# Heading aaa bbb ccc") 0 10) '())
+     (check-equal? (auto-fill-edits (vector "```" "(code aaa bbb ccc ddd)" "```") 1 10) '())
+     (check-equal? (auto-fill-edits (vector "---" "title: aaa bbb ccc" "---") 1 10) '()))))
+
+(define (auto-filled ls idx width)
+  (apply-edits (string-join (list-tail ls idx) "\n")
+               (auto-fill-edits (list->vector ls) idx width)))
+
+(define (apply-edits l edits)
+  (for/fold ([l l]) ([e (in-list edits)])
+    (string-append (substring l 0 (first e)) (third e) (substring l (second e)))))
 
 (module+ main
   (run-tests editor-utils-tests))

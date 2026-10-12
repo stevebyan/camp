@@ -209,6 +209,7 @@
 (check-equal? (pattern-meta-keys "newsletter/[issue]/*/") '("issue"))
 (check-equal? (pattern-meta-keys "[volume]/[issue]/") '("volume" "issue"))
 (check-equal? (pattern-meta-keys "blog/[yyyy]/[MM]/*/") '())
+(check-equal? (pattern-meta-keys "log/[yyyy]/[MM]/[dd]/[HH][mm]/*/") '())
 (check-equal? (pattern-meta-keys "blog/[yyyy]/[category]/*/") '("category"))
 (check-equal? (pattern-meta-keys "posts/*/") '())
 (check-equal? (pattern-meta-keys "*") '())

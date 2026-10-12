@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Racket ${{ matrix.racket-version }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        racket-version: [stable, current]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Bogdanp/setup-racket@v1.15
+        with:
+          architecture: arm64
+          distribution: full
+          variant: CS
+          version: ${{ matrix.racket-version }}
+      - name: Install packages
+        run: raco pkg install --auto --batch camp-lib/ camp-app/ camp/ camp-tests/
+      - name: Check declared dependencies
+        run: raco setup --check-pkg-deps --pkgs camp-lib camp-app camp camp-tests
+      - name: Run tests
+        run: raco test camp-tests

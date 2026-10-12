@@ -7,6 +7,7 @@
          (only-in camp/private/log use-color?)
          camp/private/ansi
          camp/app/private/window-geometry
+         (only-in mrlib/panel-wob white-on-black-panel-scheme?)
          racket/class
          racket/gui/easy
          racket/gui/easy/operator
@@ -22,6 +23,7 @@
          remember-geometry-mix
          make-mix-close
          ?dialog
+         choose-font
          set-main-frame!
          get-main-frame
          mono-font
@@ -261,6 +263,24 @@
    (vpanel
     (text msg)
     (button "Close" close!))))
+
+;; gui-lib's font dialog replaces its sample's "Standard" delta on every
+;; change, losing the white foreground text-field% gives it in dark mode. A
+;; delta on the sample text itself outlives the replacements; the callback
+;; runs once the modal dialog is up.
+(define (choose-font parent font)
+  (when (white-on-black-panel-scheme?)
+    (queue-callback
+     (λ ()
+       (for* ([w (in-list (get-top-level-windows))]
+              #:when (equal? (send w get-label) "Choose Font")
+              [c (in-list (send w get-children))]
+              #:when (is-a? c text-field%))
+         (send (send c get-editor) change-style
+               (send (make-object style-delta%) set-delta-foreground "white")
+               0 'end)))
+     #f))
+  (get-font-from-user #f parent font))
 
 ;; ============================================================================
 ;; Window geometry

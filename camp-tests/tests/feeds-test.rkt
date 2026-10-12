@@ -164,6 +164,43 @@
              "Blog feed should NOT contain pages")
 
 ;; ---------------------------------------------------------------------------
+;; page-link->feed-item: published and updated timestamps
+
+(define (timestamps-for metas)
+  (define item
+    (parameterize ([current-site-info test-info]
+                   [current-timezone 0])
+      (page-link->feed-item (page-link "/dated/" "Dated" (hash-set metas 'slug "dated"))
+                            single-coll-tag
+                            test-site-url
+                            (parse-author "Test (test@example.com)")
+                            (λ (doc ctx) '(p))
+                            (hash))))
+  (define entry (express-xml item 'atom #:as 'xexpr))
+  (for/list ([tag '(published updated)])
+    (cadr (assq tag (cddr entry)))))
+
+(check-equal? (timestamps-for (hash 'date "2024-02-15"))
+              '("2024-02-15T00:00:00Z" "2024-02-15T00:00:00Z")
+              "Without an updated meta, updated equals published")
+
+(check-equal? (timestamps-for (hash 'date "2024-02-15" 'updated "2024-02-20T08:30"))
+              '("2024-02-15T00:00:00Z" "2024-02-20T08:30:00Z")
+              "An updated meta supplies the updated timestamp")
+
+(check-equal? (timestamps-for (hash 'date "2024-02-15 09:00" 'updated "2024-02-15 09:00"))
+              '("2024-02-15T09:00:00Z" "2024-02-15T09:00:00Z")
+              "An updated meta may equal the date")
+
+(check-exn #rx"dated"
+           (λ () (timestamps-for (hash 'date "2024-02-15" 'updated "2024-02-14")))
+           "An updated meta before the date raises an error naming the page")
+
+(check-exn exn:fail:contract?
+           (λ () (timestamps-for (hash 'date "2024-02-15" 'updated "")))
+           "An empty updated meta raises an error")
+
+;; ---------------------------------------------------------------------------
 ;; Multi-collection feeds: entry IDs derive from each entry's own collection
 
 (define (entry-ids xml)

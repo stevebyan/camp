@@ -5,6 +5,7 @@
          gregor
          punct/doc
          "private/structs.rkt"
+         "private/dates.rkt"
          "private/main.rkt"
          "private/path-map.rkt"
          "private/typst-render.rkt"
@@ -32,6 +33,7 @@
  output-path-pattern?
  file-extension?
  non-rkt-file-extension?
+ current-output-dir
  ;; HTML rendering
  camp-doc->html-xexpr
  ;; Typst rendering
@@ -42,7 +44,7 @@
  default-typst-tag)
 
 (define (~d pattern v)
-  (~t (if (string? v) (iso8601->date v) v) pattern))
+  (~t (if (string? v) (meta->moment v) v) pattern))
 
 (provide/contract
  [~d (-> string? (or/c string? date-provider?) string?)]

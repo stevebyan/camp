@@ -34,6 +34,9 @@ file to get a context menu with @onscreen{Edit}, @onscreen{Preview} and @onscree
 Previewing will start the project server (if it is not already started) and open your browser to the
 localhost URL for that page.
 
+The @onscreen{Status} column shows @onscreen{Draft} for any page whose @racket['draft?] meta is
+present and not @racket[#f]. Click the column header to sort the drafts together.
+
 The toolbar buttons are pretty straightforward:
 
 @itemlist[
@@ -92,7 +95,15 @@ file. The editor provides:
  set in @onscreen{Preferences…} (like Vim's @tt{gqip}), and it is Markdown-aware: a bulleted or
  numbered list item is wrapped by itself, keeping its marker and giving continuation lines a
  hanging indent; blockquoted text keeps its @tt{>} prefix on every line; and headings, code
- fences and their contents, tables, and the metadata block are left alone.}
+ fences and their contents, tables, and the metadata block are left alone. The same rules apply as
+ you type: when a typed character carries the current line past the wrap column, that line is
+ broken where @kbd{⌘}@kbd{J} would break it, and the words that overflow move to the start of the
+ paragraph's next line, which passes its own overflow down in turn until a line fits. Lines are
+ never joined upward, and a line that ends in a Markdown hard break (two spaces or a backslash)
+ keeps its overflow on a line of its own; use @kbd{⌘}@kbd{J} to close up a paragraph after
+ deleting from it. The window's soft wrap is measured in pixels, so in a proportional font it
+ cannot stand in for a character count. Turn this off with @onscreen{Break lines at the wrap column
+ while typing} in @onscreen{Preferences…}.}
 
  @item{A centered text block, as in iA Writer: the margins grow as the window widens, and never
  shrink below a comfortable minimum.}

@@ -1,8 +1,24 @@
 #lang punct @name
 
 ---
-title: My First Post
+title: How cross-references work
 date: @founded
 ---
 
-This is my first blog post. Welcome to my new site!
+Camp keeps an index of each term you define and each page you publish. You link to them by name,
+and Camp finds the URL.
+
+In •page-ref["welcome"]{the welcome post} I defined •term{collections} and •term{source documents}.
+Those links go to the definitions. The plural forms resolve to the same terms.
+
+## Define a term
+
+Mark a term as defined at the place you explain it. A •defterm{render function} is the Racket
+function that turns a •term{source document} into a page. This site has two, in `render.rkt`.
+
+## When a name does not resolve
+
+If Camp cannot find a term or a page, it marks the reference in the page, and `raco camp build`
+logs a warning.
+
+Open `blog/first-post.md.rkt` to see the markup behind these links.

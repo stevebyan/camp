@@ -5,4 +5,10 @@ title: Welcome
 date: @earlier-date
 ---
 
-Welcome to my new blog! I'm excited to start sharing my thoughts here.
+Welcome to your new site. Camp built it from the plain text files in this folder.
+
+Each file in `blog/` and `pages/` is a •defterm{source document}: a few lines of metadata, then
+Markdown. A folder of source documents is a •defterm{collection}, and `site.rkt` says where the
+pages of each collection go.
+
+To change how the pages look, edit `render.rkt` and `static/style.css`.

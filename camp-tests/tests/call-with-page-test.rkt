@@ -55,3 +55,12 @@
   (collect/call-with-page site "First-Post"
     (λ (doc ctx)
       (check-equal? (meta-ref doc 'title) "First Post"))))
+
+(test-case "collect/call-with-page: source is site-relative with / separators"
+  (define site (load-test-site))
+  (collect/call-with-page site "custom-slug"
+    (λ (doc ctx)
+      (check-equal? (context-source ctx) "blog/third-post.md.rkt")))
+  (collect/call-with-page site "about"
+    (λ (doc ctx)
+      (check-equal? (context-source ctx) "pages/about.md.rkt"))))

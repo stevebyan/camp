@@ -3,17 +3,17 @@
 ;; Camp App - Main application window and logic
 
 (require camp/build
-         camp/serve
          (only-in camp/private/build sync-static-files output-path->url)
          (only-in camp/private/xref normalize-slug)
          (only-in camp/private/watch start-watcher! get-watch-paths path-change-type)
          (only-in camp/private/output format-duration with-timing)
-         (only-in gregor iso8601->date)
+         (only-in camp/private/dates current-site-timezone meta->moment)
          net/sendurl
          racket/exn
          racket/gui
          racket/gui/easy
          racket/gui/easy/operator
+         racket/lazy-require
          racket/list
          racket/match
          racket/math
@@ -26,15 +26,21 @@
          setup/getinfo
          camp/app/private/settings
          camp/app/private/gui
-         (only-in camp/app/private/appearance init-appearance!)
-         camp/app/private/editor
+         camp/app/private/app-appearance
          (only-in camp/app/private/editor-utils use-internal-editor? font-slot-label)
-         camp/app/private/fonts
          (only-in camp/app/private/theme import-theme-file scheme-name scheme-dark?)
          camp/app/private/site-utils
          camp/app/private/subprocess-env)
 
 (provide run-app)
+
+;; The main window needs neither the web server nor framework, which the
+;; editor, its fonts and its color schemes build on; together they take as
+;; long to load as everything else, so they load only once the window is up
+(lazy-require [camp/serve (start-server)]
+              [camp/app/private/appearance (init-appearance!)]
+              [camp/app/private/fonts (apply-active-font-slot! slot-font)]
+              [camp/app/private/editor (open-editor! close-all-editors!)])
 
 ;; The app reloads site modules in-process for its lifetime, so site
 ;; bytecode must be cleared as sites load (see camp/private/rerequire)
@@ -106,8 +112,14 @@
             #f]
            [else (load-site path)]))))
 
-(define/obs @site (load-site-from-spec (obs-peek @site-selection)))
-(obs-observe! @site-selection (λ (spec) (@site . := . (load-site-from-spec spec))))
+(define/obs @site #f)
+;; Renotifying the current spec (to reset the site menu) doesn't reload it
+(obs-observe! @site-selection
+              (let ([loaded (obs-peek @site-selection)])
+                (λ (spec)
+                  (unless (equal? spec loaded)
+                    (set! loaded spec)
+                    (@site . := . (load-site-from-spec spec))))))
 
 (define @site-root (obs-map @site (λ (s) (and s (site-root s)))))
 
@@ -143,6 +155,22 @@
 (define (build-site-async!)
   (void (thread build-site!)))
 
+;; The selected site loads after the main window appears; until its pages
+;; are listed, the controls that would switch sites stay disabled
+(define/obs @loading? (and (obs-peek @site-selection) #t))
+
+(define (load-selected-site!)
+  (define spec (obs-peek @site-selection))
+  (when spec
+    (log-msg "Loading ~a…" (site-spec->display-name spec))
+    (dynamic-wind
+     void
+     (λ () (@site . := . (load-site-from-spec spec)))
+     (λ () (@loading? . := . #f)))
+    (build-site!)))
+
+(define @switching-enabled? (obs-map @loading? not))
+
 ;; For watcher-triggered config reloads: unlike load-site-from-spec, a config
 ;; error (e.g. a half-saved edit) keeps the previous site instead of removing
 ;; it from the app. Updating @site cascades into a rebuild via @folders.
@@ -171,9 +199,26 @@
    @refresh-counter))
 
 (define @folder-selection (@ (vec-ref? (obs-peek @folders) 0)))
+;; The folder table's highlight; see track-folder-selection!
+(define/obs @folder-index #f)
+
+(define (folder-index folders folder)
+  (for/first ([f (in-vector folders)] [i (in-naturals)] #:when (equal? f folder)) i))
+
+;; Keeps a folder selected whenever the folder list changes (a site switch
+;; picks the new site's first folder) and re-shows it in the table, which
+;; drops its highlight whenever its entries change. Installed after the main
+;; window renders, so the table's own update is queued first.
+(define (track-folder-selection!)
+  (obs-observe!
+   @folders
+   (λ (folders)
+     (unless (folder-index folders (obs-peek @folder-selection))
+       (@folder-selection . := . (vec-ref? folders 0)))
+     (@folder-index . := . (folder-index folders (obs-peek @folder-selection))))))
 
 (define @source-doc-selection (@ ""))
-(define-values (date-col title-col file-col fullpath) (values 0 1 2 3))
+(define-values (date-col title-col status-col file-col fullpath) (values 0 1 2 3 4))
 (define @source-sorting (@ (cons date-col string-ci>?)))
 
 (define month-names #("Jan" "Feb" "Mar" "Apr" "May" "Jun"
@@ -192,6 +237,7 @@
 (define (source-entry->row entry)
   (vector (format-display-date (vector-ref entry date-col))
           (~a (vector-ref entry title-col))
+          (vector-ref entry status-col)
           (~a (vector-ref entry file-col))))
 
 (define (sort-pages pages sorting)
@@ -242,18 +288,24 @@
 ;; ============================================================================
 ;; Components: Site selection
 
+;; Editor windows belong to the site they were opened from (a save rebuilds
+;; the current site), so they close first; cancelling a save prompt cancels
+;; the switch
 (define (on-site-select v)
-  (log-msg "Switched to site: ~a" v)
-  (mindful-demure-server-stop)
-  (@site-selection . := . v)
-  (@folder-selection . := . (vec-ref? (obs-peek @folders) 0))
-  (build-site-async!))
+  (cond
+    [(close-editors!)
+     (log-msg "Switched to site: ~a" v)
+     (mindful-demure-server-stop)
+     (@site-selection . := . v)
+     (build-site-async!)]
+    [else (@site-selection . <~ . values)]))
 
 (define :sites-choice
   (choice @sites on-site-select
           #:selection @site-selection
           #:choice->label site-spec->display-name
           #:label "Sites"
+          #:enabled? @switching-enabled?
           #:stretch '(#t #f)))
 
 ;; ============================================================================
@@ -275,6 +327,7 @@
 (define :folders-table
   (table '("Folders") @folders
          on-folder-select
+         #:selection @folder-index
          #:entry->row path->table-row))
 
 ;; ============================================================================
@@ -287,10 +340,20 @@
       (obs-update! @refresh-counter add1)
       (trigger-refresh!)))
 
+;; Set once the editor module loads; until then there are no editor windows
+;; to close, and closing none shouldn't load it
+(define editor-used? #f)
+
+(define (close-editors!)
+  (or (not editor-used?) (close-all-editors!)))
+
 (define (edit-source p)
-  (if (use-internal-editor? (obs-peek @editor))
-      (open-editor! p #:on-save handle-editor-save!)
-      (edit-source/external p)))
+  (cond
+    [(use-internal-editor? (obs-peek @editor))
+     (force editor-support)
+     (set! editor-used? #t)
+     (open-editor! p #:on-save handle-editor-save!)]
+    [else (edit-source/external p)]))
 
 (define (edit-source/external p)
   (thread
@@ -380,13 +443,14 @@
           [else (super on-subwindow-event receiver event)])))))
 
 (define :source-docs-table
-  (table '("Date" "Title" "URL") @sources-in-folder
+  (table '("Date" "Title" "Status" "URL") @sources-in-folder
          on-source-select
          #:entry->row source-entry->row
          #:mixin source-table-mixin
          #:column-widths '((0 120 80 150)
                            (1 300 100 600)
-                           (2 200 100 300))))
+                           (2 60 50 100)
+                           (3 200 100 300))))
 
 ;; ============================================================================
 ;; Components: Toolbar
@@ -610,8 +674,8 @@
     (menu-item "Build" (λ () (thread build-site!)) #:shortcut '(cmd #\B) #:enabled? @has-site?)
     (menu-item "Full Rebuild" (λ () (thread full-rebuild!)) #:shortcut '(cmd shift #\B) #:enabled? @has-site?)
     (menu-item-separator)
-    (menu-item "Add site…" on-add-site)
-    (menu-item "Remove this site…" on-remove-site)
+    (menu-item "Add site…" on-add-site #:enabled? @switching-enabled?)
+    (menu-item "Remove this site…" on-remove-site #:enabled? @switching-enabled?)
     (menu-item-separator)
     (menu-item "Preferences…" (λ () (render (?prefs)))))))
 
@@ -674,7 +738,9 @@
        (if (and output-pattern (non-empty-string? actual-slug))
            (with-handlers ([exn:fail? (λ (_) "")])
              (define date-val
-               (and (non-empty-string? date) (iso8601->date date)))
+               (and (non-empty-string? date)
+                    (parameterize ([current-site-timezone (site-timezone site)])
+                      (meta->moment date))))
              (define metas (peek-metas-hash))
              (output-path->url
               (format-output-path output-pattern actual-slug date-val
@@ -786,11 +852,11 @@
      (button "Add" add-by-path)
      (button "Cancel" close!)))))
 
-(define (editor-display-name path)
-  (cond
-    [(or (not path) (and (string? path) (string=? path ""))) "Built-in editor"]
-    [(path? path) (path->string (file-name-from-path path))]
-    [else (let ([p (string->path path)]) (path->string (file-name-from-path p)))]))
+(define (external-editor-label app)
+  (if (non-empty-string? app)
+      (format "External editor (~a)"
+              (regexp-replace #rx"[.]app$" (path->string (file-name-from-path app)) ""))
+      "External editor"))
 
 (define (choose-editor!)
   (define default-dir
@@ -798,18 +864,36 @@
          (string->path "/Applications/")))
   (define path (get-file "Choose editor" (get-main-frame) default-dir))
   (when path
+    (@external-editor . := . (path->string path))
     (@editor . := . (path->string path))))
 
+(define (use-external-editor!)
+  (define app (obs-peek @external-editor))
+  (cond
+    [(non-empty-string? app) (@editor . := . app)]
+    [else (choose-editor!)
+          ;; a cancelled chooser leaves the radio clicked; renotify to clear it
+          (@editor . <~ . values)]))
+
 ;; HIG two-column form: right-aligned label column, left-aligned controls
-(define (pref-row label #:top? [top? #f] . controls)
+;; #:top-inset pins the label to the top of a tall control, dropped far
+;; enough to sit level with that control's first line.
+(define ((make-pref-row label-width) label #:top-inset [inset #f] . controls)
   (hpanel
    #:stretch '(#t #f)
-   #:spacing 10
-   (hpanel #:min-size '(130 #f)
+   #:spacing 6
+   #:alignment (list 'left (if inset 'top 'center))
+   (hpanel #:min-size (list label-width #f)
+           #:margin (list 0 (or inset 0))
            #:stretch '(#f #f)
-           #:alignment (list 'right (if top? 'top 'center))
+           #:alignment '(right center)
            (text label))
-   (apply hpanel #:spacing 8 #:alignment '(left center) controls)))
+   (apply hpanel #:spacing 4 #:alignment '(left center) controls)))
+
+;; Rows inside the group box give up its inset, so every colon lines up
+(define pref-group-inset 8)
+(define pref-row (make-pref-row (+ 94 pref-group-inset)))
+(define group-pref-row (make-pref-row 94))
 
 (define pref-caption-color (make-color 120 120 120))
 
@@ -817,25 +901,44 @@
   (text s #:font small-control-font #:color pref-caption-color))
 
 (define (pref-group-gap)
-  (hpanel #:min-size '(#f 10) #:stretch '(#t #f)))
+  (hpanel #:min-size '(#f 8) #:stretch '(#t #f)))
+
+(define pref-wide-control 240)
 
 (define (change-font-slot! idx)
-  (define f (get-font-from-user "Slot font" (get-main-frame) (slot-font idx)))
+  (force editor-support)
+  (define f (choose-font (get-main-frame) (slot-font idx)))
   (when f
     (define face (or (send f get-face)
                      (get-family-builtin-face (send f get-family))))
     (define size (exact-round (send f get-size)))
     (@font-slots . <~ . (λ (slots) (list-set slots idx (list face size))))))
 
-(define (font-slot-controls idx)
-  (list
-   (hpanel #:min-size '(16 #f) #:stretch '(#f #f)
-           (text (obs-map @font-slot (λ (active) (if (= active idx) "●" "")))))
-   (hpanel #:min-size '(210 #f) #:stretch '(#f #f) #:alignment '(left center)
-           (text (obs-map @font-slots
-                          (λ (slots) (font-slot-label idx (list-ref slots idx))))))
-   (button "Change…" (λ () (change-font-slot! idx)))
-   (button "Activate" (λ () (@font-slot . := . idx)))))
+;; A radio-box% fixes its labels at creation and lays out only its own items.
+;; Each option is therefore a one-item group: rebuilt when its label changes,
+;; and free to share a row with other controls.
+(define (solo-radio label @selected? select!)
+  (observable-view
+   (@ label)
+   (λ (label)
+     (radios '(#t)
+             (λ (on?) (when on? (select!)))
+             #:choice->label (λ (_) label)
+             #:selection @selected?
+             ;; radio-box% selects its first item unless told otherwise
+             #:mixin (λ (%) (class % (super-new [selection #f])))))))
+
+;; The stretchy panel pushes every row's button to the same right edge
+(define (font-slot-row idx)
+  (hpanel
+   #:alignment '(left center)
+   (hpanel
+    #:min-size '(200 #f)
+    #:alignment '(left center)
+    (solo-radio (obs-map @font-slots (λ (slots) (font-slot-label idx (list-ref slots idx))))
+                (obs-map @font-slot (λ (active) (= active idx)))
+                (λ () (@font-slot . := . idx))))
+   (button "Change…" (λ () (change-font-slot! idx)) #:margin '(2 0))))
 
 (define (scheme-display-name v)
   (match v
@@ -880,43 +983,15 @@
 
 (define (?prefs)
   (define-values (close! closing-mixin) (make-mix-close))
-  (define @editor-label (obs-map @editor editor-display-name))
+  (define @camp-editor? (obs-map @editor use-internal-editor?))
   (define/obs @scheme-selection #f)
   (dialog
    #:title "Preferences"
-   #:min-size '(680 #f)
    #:mixin closing-mixin
    (vpanel
-    #:margin '(20 20)
-    #:spacing 6
+    #:margin '(20 16)
+    #:spacing 2
     #:alignment '(left top)
-    (pref-row "Editor:"
-              (text @editor-label)
-              (button "Choose External…" (λ () (choose-editor!)))
-              (button "Use Built-in" (λ () (@editor . := . ""))))
-    (pref-row "Options:"
-              (checkbox (λ (on?) (@vim-mode . := . (and on? #t)))
-                        #:label "Vim keybindings"
-                        #:checked? @vim-mode))
-    (pref-row ""
-              (checkbox (λ (on?) (@line-numbers? . := . (and on? #t)))
-                        #:label "Show line numbers"
-                        #:checked? @line-numbers?))
-    (pref-row "Wrap column:"
-              (input (obs-map @fill-column number->string)
-                     (λ (_action s)
-                       (define n (string->number s))
-                       (when (exact-positive-integer? n)
-                         (@fill-column . := . n)))
-                     #:min-size '(64 #f)
-                     #:stretch '(#f #f))
-              (pref-caption "⌘J re-wraps the current paragraph"))
-    (pref-group-gap)
-    (apply pref-row "Editor font:" (font-slot-controls 0))
-    (apply pref-row "" (font-slot-controls 1))
-    (apply pref-row "" (font-slot-controls 2))
-    (pref-row "" (pref-caption "⇧⌘F switches to the next font slot"))
-    (pref-group-gap)
     (pref-row "Appearance:"
               (choice '(light dark system)
                       (λ (m) (when m (@appearance-mode . := . m)))
@@ -924,36 +999,89 @@
                       #:choice->label (λ (m) (case m
                                                [(light) "Light"]
                                                [(dark) "Dark"]
-                                               [else "Follow system"]))
-                      #:min-size '(200 #f)))
-    (pref-row "Light scheme:"
-              (choice (scheme-choices #f)
-                      (λ (v) (when v (@light-scheme . := . v)))
-                      #:selection @light-scheme
-                      #:choice->label scheme-display-name
-                      #:min-size '(280 #f)))
-    (pref-row "Dark scheme:"
-              (choice (scheme-choices #t)
-                      (λ (v) (when v (@dark-scheme . := . v)))
-                      #:selection @dark-scheme
-                      #:choice->label scheme-display-name
-                      #:min-size '(280 #f)))
-    (pref-row "Themes:" #:top? #t
-              (vpanel
-               #:spacing 8
-               #:alignment '(left top)
-               (table '("Installed themes" "Mode")
-                      (obs-map @color-schemes list->vector)
-                      (λ (_evt entries idx)
-                        (@scheme-selection . := . (and idx (vector-ref entries idx))))
-                      #:entry->row (λ (s) (vector (scheme-name s)
-                                                  (if (scheme-dark? s) "dark" "light")))
-                      #:min-size '(#f 140))
-               (hpanel
-                #:spacing 8
-                #:stretch '(#t #f)
-                (button "Import Theme…" (λ () (import-scheme!)))
-                (button "Remove" (λ () (remove-scheme! (obs-peek @scheme-selection)))))))
+                                               [else "Follow System"]))
+                      #:min-size (list pref-wide-control #f)))
+    (pref-group-gap)
+    (pref-row "Editor:"
+              (solo-radio "Camp Editor" @camp-editor? (λ () (@editor . := . ""))))
+    (pref-row ""
+              (solo-radio (obs-map @external-editor external-editor-label)
+                          (obs-map @camp-editor? not)
+                          use-external-editor!)
+              (button "Choose Editor App…" choose-editor!))
+    (pref-group-gap)
+    (group
+     "Camp Editor"
+     #:stretch '(#t #f)
+     (vpanel
+      #:margin '(0 6)
+      #:spacing 2
+      #:alignment '(left top)
+      (group-pref-row "Options:"
+                      (checkbox (λ (on?) (@vim-mode . := . (and on? #t)))
+                                #:label "Vim keybindings"
+                                #:checked? @vim-mode))
+      (group-pref-row ""
+                      (checkbox (λ (on?) (@line-numbers? . := . (and on? #t)))
+                                #:label "Show line numbers"
+                                #:checked? @line-numbers?))
+      (group-pref-row ""
+                      (checkbox (λ (on?) (@auto-fill? . := . (and on? #t)))
+                                #:label "Break lines at the wrap column while typing"
+                                #:checked? @auto-fill?))
+      (group-pref-row "Wrap column:"
+                      (input (obs-map @fill-column number->string)
+                             (λ (_action s)
+                               (define n (string->number s))
+                               (when (exact-positive-integer? n)
+                                 (@fill-column . := . n)))
+                             #:min-size '(56 #f)
+                             #:stretch '(#f #f))
+                      (pref-caption "⌘J re-wraps the current paragraph"))
+      (pref-group-gap)
+      (group-pref-row "Editor font:" #:top-inset 7
+                      (vpanel
+                       #:stretch '(#f #f)
+                       #:alignment '(left top)
+                       (font-slot-row 0)
+                       (font-slot-row 1)
+                       (font-slot-row 2)
+                       (pref-caption "⇧⌘F switches to the next font")))
+      (pref-group-gap)
+      (group-pref-row "Light scheme:"
+                      (choice (scheme-choices #f)
+                              (λ (v) (when v (@light-scheme . := . v)))
+                              #:selection @light-scheme
+                              #:choice->label scheme-display-name
+                              #:min-size (list pref-wide-control #f)))
+      (group-pref-row "Dark scheme:"
+                      (choice (scheme-choices #t)
+                              (λ (v) (when v (@dark-scheme . := . v)))
+                              #:selection @dark-scheme
+                              #:choice->label scheme-display-name
+                              #:min-size (list pref-wide-control #f)))
+      (group-pref-row "Themes:" #:top-inset 4
+                      (vpanel
+                       #:stretch '(#f #f)
+                       #:alignment '(left top)
+                       (table '("Name" "Mode")
+                              (obs-map @color-schemes list->vector)
+                              (λ (_evt entries idx)
+                                (@scheme-selection . := . (and idx (vector-ref entries idx))))
+                              #:entry->row (λ (s) (vector (scheme-name s)
+                                                          (if (scheme-dark? s) "Dark" "Light")))
+                              #:column-widths '((0 150) (1 66))
+                              #:margin '(2 2)
+                              #:min-size (list pref-wide-control 106)
+                              #:stretch '(#f #f))
+                       (hpanel
+                        (button "Import Theme…" (λ () (import-scheme!)))
+                        (button "Remove"
+                                (λ ()
+                                  (remove-scheme! (obs-peek @scheme-selection))
+                                  (@scheme-selection . := . #f))
+                                #:enabled? (obs-map @scheme-selection (λ (s) (and s #t)))))
+                       (pref-caption "Imports TextMate (.tmTheme) and VS Code (.json) themes")))))
     (pref-group-gap)
     (hpanel
      #:stretch '(#t #f)
@@ -982,13 +1110,20 @@
    #:title "Camp"
    #:mixin (λ (%)
              ((remember-geometry-mix @main-geometry)
-              (dragdrop-mix (class % (super-new) (set-main-frame! this)))))
+              (dragdrop-mix
+               (class %
+                 (super-new)
+                 (set-main-frame! this)
+                 ;; With the main window gone there's no way back to it,
+                 ;; so its editor windows go too
+                 (define/augment (can-close?)
+                   (and (close-editors!) (inner #t can-close?)))))))
    :main-menu
    (vpanel
     (hpanel
      (vpanel #:min-size '(180 #f)
              #:stretch '(#f #t)
-             (button "➕ Add Site" on-add-site #:min-size '(150 40))
+             (button "➕ Add Site" on-add-site #:min-size '(150 40) #:enabled? @switching-enabled?)
              :sites-choice
              :folders-table)
      (vpanel
@@ -1002,12 +1137,24 @@
 ;; ============================================================================
 ;; Entry point
 
+;; framework loads while the app is otherwise idle, or at once for anything
+;; that needs it sooner
+(define editor-support
+  (delay/idle
+   (init-appearance!)
+   (apply-active-font-slot!)
+   ;; framework installs its own (empty) preferences dialog as it loads
+   (install-preferences-handler!)))
+
+(define (install-preferences-handler!)
+  (application-preferences-handler (λ () (render (?prefs)))))
+
 (define (run-app)
   (application-about-handler (λ () (render (?about))))
-  ;; framework installed its own (empty) preferences dialog on this handler
-  (application-preferences-handler (λ () (render (?prefs))))
-  (init-appearance!)
-  (apply-active-font-slot!)
-  (when (obs-peek @site)
-    (build-site-async!))
-  (render §app))
+  (install-preferences-handler!)
+  (init-app-appearance!)
+  (begin0
+    (render §app)
+    (track-folder-selection!)
+    ;; low priority: after the window's first paint
+    (queue-callback (λ () (thread load-selected-site!)) #f)))

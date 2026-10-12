@@ -4,6 +4,7 @@
          racket/list
          racket/string
          gregor
+         "dates.rkt"
          "structs.rkt")
 
 (provide filter-pages
@@ -46,20 +47,9 @@
      (cond
        [(not raw-date) #f]  ; no date means excluded from date-filtered results
        [else
-        (define page-date (parse-date-value raw-date))
-        (cond
-          [(not page-date) #f]  ; unparseable date means excluded
-          [else
-           (and (or (not date-from) (date>=? page-date date-from))
-                (or (not date-to) (date<=? page-date date-to)))])])]))
-
-(define (parse-date-value v)
-  (cond
-    [(date-provider? v) v]
-    [(string? v)
-     (with-handlers ([exn:fail? (λ (_) #f)])
-       (iso8601->date v))]
-    [else #f]))
+        (define page-date (->date (meta->moment raw-date)))
+        (and (or (not date-from) (date>=? page-date (->date date-from)))
+             (or (not date-to) (date<=? page-date (->date date-to))))])]))
 
 ;; ---------------------------------------------------------------------------
 ;; Taxonomy Filtering

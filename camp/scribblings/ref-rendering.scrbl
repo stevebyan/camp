@@ -4,6 +4,7 @@
           hash-view/scribble
           (for-label (except-in racket/base date date?)
                      camp
+                     camp/build
                      gregor
                      punct/doc))
 
@@ -18,14 +19,22 @@ metadata.
 @defhashview[context ([slug string?]
                        [url string?]
                        [collection string?]
-                       [taxonomies hash?])]{
+                       [taxonomies hash?]
+                       [source (or/c string? #f) #:default #f])]{
 
 A @tech{hash-view} representing a @tech{render context}. The context is passed to render functions
 and provides access to taxonomy data.
 
 The @racket[url] field contains the canonical URL for the current page. The @racket[taxonomies]
 field maps taxonomy keys to lists of normalized values for the current page. Use the @racket[prev]
-and @racket[next] functions with a context to navigate between pages.}
+and @racket[next] functions with a context to navigate between pages.
+
+The @racket[source] field is the path of the page's source file, relative to the site root (the
+folder containing the @tt{camp/site} file), with @racket["/"] as the separator on every platform:
+for example, @racket["blog/hello-world.md.rkt"]. It does not depend on the page's slug, so it is
+suitable for building links to the file in a version control web interface. Every page generated
+by a paginated @tt{camp/page} document has the same @racket[source]. Contexts constructed by
+other code may omit it, in which case @racket[context-source] returns @racket[#f].}
 
 @section[#:tag "ref-html-rendering"]{HTML Rendering}
 
@@ -168,8 +177,9 @@ Filters a list of page-links by date range and/or taxonomy values. All filters a
 AND logic---pages must pass all specified filters to be included.
 
 @itemlist[
-  @item{@racket[#:date-from] and @racket[#:date-to]: Inclusive date bounds. Pages without a date
-        (or with unparseable dates) are excluded when date filtering is active.}
+  @item{@racket[#:date-from] and @racket[#:date-to]: Inclusive date bounds, compared by calendar
+        date only. Pages without a date are excluded when date filtering is active, and an
+        unparseable date raises an exception (see @secref["ref-site-dates"]).}
   @item{@racket[#:date-key]: The metadata key to use for date comparison (default: @racket['date]).}
   @item{@racket[#:taxonomies]: A hash where keys are taxonomy names (strings or symbols) and values
         are either a single string (exact match) or a list of strings (match any).}]
@@ -192,6 +202,33 @@ This function is useful for building custom page sets or for book parts that fil
 
 Taxonomy values in page metadata can be comma-separated strings or lists; both formats are
 normalized before matching.}
+
+@section[#:tag "ref-output-files"]{Additional Output Files}
+
+@defparam[current-output-dir dir (or/c path? #f)]{
+A parameter containing the complete path of the site's output folder. Set by @racket[build!] and
+@racket[collect/call-with-page] for the duration of the render; @racket[#f] otherwise.
+
+Render functions can use this to write files that accompany a page, such as generated images.
+A build leaves such files in place, with two exceptions: @filepath{.html} files that the build did
+not itself produce are deleted at the end of each build, and a clean build empties the whole output
+folder first. Files that are expensive to produce are best kept in a cache folder elsewhere and
+copied into place when missing:
+
+@codeblock|{
+(define-runtime-path card-cache "card-cache")
+
+(define (ensure-card! doc ctx)
+  (define name (~a (context-slug ctx) ".png"))
+  (define cached (build-path card-cache name))
+  (define published (build-path (current-output-dir) "cards" name))
+  (unless (file-exists? cached)
+    (make-parent-directory* cached)
+    (draw-card! doc cached))
+  (unless (file-exists? published)
+    (make-parent-directory* published)
+    (copy-file cached published)))
+}|}
 
 @section[#:tag "ref-date-formatting"]{Date Formatting}
 
@@ -225,7 +262,7 @@ See the @hyperlink["http://unicode.org/reports/tr35/tr35-dates.html#Date_Field_S
 documentation} for the complete list of pattern symbols.}
 
 @defproc[(~d [pattern string?] [v (or/c string? date-provider?)]) string?]{
-Formats a date using CLDR patterns, automatically converting ISO 8601 date strings. This is the
+Formats a date using CLDR patterns, automatically converting date strings. This is the
 recommended function for formatting dates from page metadata, since Punct documents provide dates
 as strings. The pattern comes first, matching Racket's @racket[format] convention.
 
@@ -235,9 +272,11 @@ as strings. The pattern comes first, matching Racket's @racket[format] conventio
 
 (~d "d MMM yyyy" date)      ; "15 Jan 2025" - works either way
 (~d "yyyy-MM-dd" date)      ; "2025-01-15" - for datetime attributes
+(~d "h:mm a" "2025-01-15T09:30")  ; "9:30 AM"
 }|
 
 If @racket[_v] is already a @racket[date-provider?], it is passed directly to @racket[~t]. If
-@racket[_v] is a string, it is first parsed as an ISO 8601 date.}
+@racket[_v] is a string, it is first parsed as a @racket[moment] in the same way as @tt{date}
+metadata (see @secref["ref-site-dates"]).}
 
 

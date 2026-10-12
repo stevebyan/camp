@@ -4,12 +4,10 @@
 
 (require racket/file
          racket/list
-         racket/match
          racket/path
          racket/string
          "structs.rkt"
-         "collections.rkt"
-         "log.rkt")
+         "collections.rkt")
 
 (provide get-watch-paths
          start-watcher!
@@ -63,16 +61,13 @@
   (define output-dir (build-path root (site-output-folder site)))
 
   (remove-duplicates
-   (filter file-or-directory-exists?
+   (filter file-exists?
            (append
             (list (simplify-path site-config-path))
             (get-source-paths site root source-ext)
             (get-static-paths static-dir)
             (get-render-module-paths site root)
             (get-root-rkt-files root output-dir)))))
-
-(define (file-or-directory-exists? p)
-  (or (file-exists? p) (directory-exists? p)))
 
 (define (get-source-paths site root source-ext)
   (for*/list ([coll (in-list (site-collections site))]
@@ -82,14 +77,12 @@
 (define (get-collection-source-paths root coll source-ext)
   (define source-dir (build-path root (source-pattern->directory (collection-source coll))))
   (if (directory-exists? source-dir)
-      (cons source-dir (find-sources source-dir source-ext))
+      (find-sources source-dir source-ext)
       '()))
 
 (define (get-static-paths static-dir)
   (if (directory-exists? static-dir)
-      (cons static-dir
-            (for/list ([item (in-directory static-dir)])
-              item))
+      (find-files file-exists? static-dir)
       '()))
 
 (define (get-render-module-paths site root)
@@ -135,65 +128,48 @@
 
 ;; ---------------------------------------------------------------------------
 ;; File Watcher
+;;
+;; The watcher polls modification times. A filesystem change event costs an
+;; open file descriptor per path on macOS, where a process gets 256 by
+;; default: a site of a few hundred files would leave the server none to
+;; accept connections with.
 
-;; paths may be a thunk, re-consulted each iteration so the watch list can
-;; follow new files and site config changes without restarting the watcher
-(define (start-watcher! paths on-change #:debounce-ms [debounce-ms 1000])
-  (define stop-flag (box #f))
-  (define last-rebuild-end-time (box 0))
+(define (snapshot paths)
+  (for/list ([p (in-list paths)])
+    (cons p (with-handlers ([exn:fail:filesystem? (λ (_) #f)])
+              (hash-ref (file-or-directory-stat p) 'modify-time-nanoseconds)))))
 
-  (define watcher-thread
+;; The first path, in watch-list order, that was edited or added; failing
+;; that, one that was removed
+(define (first-change old new)
+  (define (differing entries others)
+    (define times (make-immutable-hash others))
+    (for/first ([entry (in-list entries)]
+                #:unless (equal? (cdr entry) (hash-ref times (car entry) #f)))
+      (car entry)))
+  (or (differing new old) (differing old new)))
+
+;; paths may be a thunk, re-consulted each poll so the watch list can follow
+;; new files and site config changes without restarting the watcher. The
+;; snapshot compared against is the one taken before on-change ran, so an
+;; edit made during a build is reported by the next poll.
+(define (start-watcher! paths on-change #:interval-ms [interval-ms 500])
+  (define stop (make-semaphore 0))
+  (define (watched)
+    (snapshot (if (procedure? paths) (paths) paths)))
+  ;; taken before returning: an edit made right after must not join the baseline
+  (define initial (watched))
+  (define watcher
     (thread
      (λ ()
-       (let loop ()
-         (unless (unbox stop-flag)
-           (define current-paths
-             (filter file-or-directory-exists?
-                     (if (procedure? paths) (paths) paths)))
-
-           (when (null? current-paths)
-             (log-camp-warning "no paths to watch")
-             (sleep 1)
-             (loop))
-
-           ;; Create filesystem change events for all paths
-           (define evts
-             (for/list ([p (in-list current-paths)])
-               (filesystem-change-evt p)))
-
-           ;; Wait for any change (with break support)
-           (define result
-             (with-handlers ([exn:break? (λ (e) 'break)])
-               (apply sync/enable-break
-                      (for/list ([p (in-list current-paths)]
-                                 [evt (in-list evts)])
-                        (handle-evt evt (λ (_) p))))))
-
-           ;; Cancel all events
-           (for-each filesystem-change-evt-cancel evts)
-
-           ;; Handle result
-           (match result
-             ['break (void)]  ; Stop on break
-             [(? path? changed-path)
-              ;; Debounce: check if enough time has passed since last rebuild COMPLETED
-              (define now (current-inexact-milliseconds))
-              (define last-end (unbox last-rebuild-end-time))
-              (cond
-                [(> (- now last-end) debounce-ms)
-                 ;; Trigger rebuild
-                 (on-change changed-path)
-                 ;; Record when rebuild finished (not when it started)
-                 (set-box! last-rebuild-end-time (current-inexact-milliseconds))]
-                [else
-                 ;; Within debounce window, skip but log
-                 (log-camp-debug "debounce: skipping event for ~a" changed-path)])
-              (loop)]
-             [_ (loop)]))))))
-
-  ;; Return stop procedure
+       (let loop ([old initial])
+         (unless (sync/timeout (/ interval-ms 1000.0) stop)
+           ;; a folder deleted mid-enumeration: look again next time
+           (define new (with-handlers ([exn:fail:filesystem? (λ (_) old)])
+                         (watched)))
+           (define changed (first-change old new))
+           (when changed (on-change changed))
+           (loop new))))))
   (λ ()
-    (set-box! stop-flag #t)
-    (when (thread-running? watcher-thread)
-      (break-thread watcher-thread)
-      (sync/timeout 0.5 watcher-thread))))
+    (semaphore-post stop)
+    (void (sync/timeout 0.5 watcher))))

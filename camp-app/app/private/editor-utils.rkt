@@ -6,13 +6,15 @@
          racket/math
          racket/string)
 
-(provide editor-title
+(provide auto-fill-edits
+         editor-title
          fill-paragraph
          fill-unit
          font-slot-label
          gutter-font-size
          markup-aware
          next-font-slot
+         position-after-edits
          promote-markup
          saved-message
          use-internal-editor?)
@@ -98,15 +100,6 @@
 
 (define (blank-line? l) (regexp-match? blank-rx l))
 
-(define (boundary-line? l)
-  (or (blank-line? l)
-      (regexp-match? lang-rx l)
-      (regexp-match? fence-rx l)
-      (regexp-match? heading-rx l)
-      (regexp-match? hr-rx l)
-      (regexp-match? setext-rx l)
-      (regexp-match? table-rx l)))
-
 (define (quote-prefix l)
   (cond [(regexp-match quote-rx l) => car]
         [else ""]))
@@ -117,9 +110,38 @@
 (define (strip-quote l)
   (substring l (string-length (quote-prefix l))))
 
+(define (boundary-line? l)
+  (define body (strip-quote l))
+  (for/or ([rx (in-list (list blank-rx lang-rx fence-rx heading-rx hr-rx setext-rx table-rx))])
+    (regexp-match? rx body)))
+
 (define (item-prefix l)
   (cond [(regexp-match item-rx l) => car]
         [else #f]))
+
+(define interrupt-marker-rx #px"^[ \t]*(?:[-*+]|0*1[.)])")
+
+;; Whether line i is the first line of the unit above it
+(define (unit-start? lines i)
+  (or (zero? i)
+      (boundary-line? (vector-ref lines (sub1 i)))
+      (not (= (quote-depth (vector-ref lines i))
+              (quote-depth (vector-ref lines (sub1 i)))))))
+
+;; Line i's list marker prefix when it truly starts a list item, else #f.
+;; Per CommonMark, only a bullet or "1." can interrupt a paragraph, so a
+;; wrapped "2018." at the start of a line is paragraph text unless a list
+;; is already open in the same unit.
+(define (item-start lines i)
+  (define prefix (item-prefix (strip-quote (vector-ref lines i))))
+  (and prefix
+       (or (regexp-match? interrupt-marker-rx prefix)
+           (unit-start? lines i)
+           (let loop ([j (sub1 i)])
+             (cond [(item-start lines j) #t]
+                   [(unit-start? lines j) #f]
+                   [else (loop (sub1 j))])))
+       prefix))
 
 (define (in-fence? lines idx)
   (odd? (for/sum ([i (in-range idx)]
@@ -160,52 +182,96 @@
       text
       (wrap-words words width indent indent)))
 
+;; Prefixes for a unit's first and later lines: quote markers and indent
+;; carry over, a list marker becomes a hanging indent
+(define (fill-prefixes lines i)
+  (define l (vector-ref lines i))
+  (define qp (quote-prefix l))
+  (define body (strip-quote l))
+  (define lead (or (item-start lines i) (car (regexp-match #px"^[ \t]*" body))))
+  (values (string-append qp lead)
+          (string-append qp (regexp-replace* #px"\\S" lead " "))))
+
 (define (rewrap lines top bottom width)
-  (define qp (quote-prefix (vector-ref lines top)))
-  (define stripped
-    (for/list ([i (in-range top (add1 bottom))])
-      (strip-quote (vector-ref lines i))))
-  (define marker (item-prefix (car stripped)))
-  (define-values (first-prefix cont-prefix)
-    (if marker
-        (values (string-append qp marker)
-                (string-append qp (make-string (string-length marker) #\space)))
-        (let ([indent (car (regexp-match #px"^[ \t]*" (car stripped)))])
-          (values (string-append qp indent)
-                  (string-append qp indent)))))
-  (define body-first
-    (if marker
-        (substring (car stripped) (string-length marker))
-        (car stripped)))
-  (wrap-words (append (string-split body-first)
-                      (append-map string-split (cdr stripped)))
+  (define-values (first-prefix cont-prefix) (fill-prefixes lines top))
+  (wrap-words (append-map
+               string-split
+               (cons (substring (vector-ref lines top) (string-length first-prefix))
+                     (for/list ([i (in-range (add1 top) (add1 bottom))])
+                       (strip-quote (vector-ref lines i)))))
               width first-prefix cont-prefix))
 
-(define (fill-unit lines idx width)
-  (define n (vector-length lines))
-  (define (line i) (vector-ref lines i))
-  (and (< idx n)
-       (not (boundary-line? (line idx)))
+(define (fillable? lines idx)
+  (and (< idx (vector-length lines))
+       (not (boundary-line? (vector-ref lines idx)))
        (not (in-fence? lines idx))
        (not (let ([md (metadata-bounds lines)])
-              (and md (< (car md) idx) (<= idx (cdr md)))))
-       (let* ([depth (quote-depth (line idx))]
-              [top
-               (let loop ([i idx])
-                 (cond
-                   [(item-prefix (strip-quote (line i))) i]
-                   [(or (zero? i)
-                        (boundary-line? (line (sub1 i)))
-                        (not (= depth (quote-depth (line (sub1 i))))))
-                    i]
-                   [(item-prefix (strip-quote (line (sub1 i)))) (sub1 i)]
-                   [else (loop (sub1 i))]))]
-              [bottom
-               (let loop ([i idx])
-                 (if (or (= i (sub1 n))
-                         (boundary-line? (line (add1 i)))
-                         (not (= depth (quote-depth (line (add1 i)))))
-                         (item-prefix (strip-quote (line (add1 i)))))
-                     i
-                     (loop (add1 i))))])
+              (and md (< (car md) idx) (<= idx (cdr md)))))))
+
+;; Last line of the fill unit holding line idx
+(define (unit-bottom lines idx)
+  (define depth (quote-depth (vector-ref lines idx)))
+  (let loop ([i idx])
+    (define next (add1 i))
+    (if (or (= next (vector-length lines))
+            (boundary-line? (vector-ref lines next))
+            (not (= depth (quote-depth (vector-ref lines next))))
+            (item-start lines next))
+        i
+        (loop next))))
+
+(define hard-break-rx #px"(?: {2,}|\\\\)$")
+
+;; Auto-fill: the (start end replacement) edits, rightmost first, that hard-wrap
+;; line idx as fill-unit would and carry what overflows onto the unit's next
+;; line, and so on down until a line fits. Offsets count from the start of line
+;; idx and keep the text's own spacing, so no line exceeds width. line-start is
+;; the offset that lands in column 0 once the edits so far are made.
+(define (auto-fill-edits lines idx width)
+  (define (line i) (vector-ref lines i))
+  (cond
+    [(and (fillable? lines idx)
+          (> (string-length (line idx)) width))
+     (define-values (first-prefix cont-prefix) (fill-prefixes lines idx))
+     (define bottom (unit-bottom lines idx))
+     (let loop ([i idx] [base 0] [skip (string-length first-prefix)]
+                [edits '()] [line-start 0] [prev-end #f])
+       (define-values (edits* line-start* prev-end* broke?)
+         (for/fold ([edits edits] [line-start line-start] [prev-end prev-end] [broke? #f])
+                   ([w (in-list (regexp-match-positions* #px"\\S+" (line i) skip))])
+           (define-values (from to) (values (+ base (car w)) (+ base (cdr w))))
+           (if (and prev-end (> (- to line-start) width))
+               (values (cons (list prev-end from (string-append "\n" cont-prefix)) edits)
+                       (- from (string-length cont-prefix))
+                       to
+                       #t)
+               (values edits line-start to broke?))))
+       (define next-base (+ base (string-length (line i)) 1))
+       (define w
+         (and broke?
+              (< i bottom)
+              (not (regexp-match? hard-break-rx (line i)))
+              (let ([next (line (add1 i))])
+                (regexp-match-positions #px"\\S+" next (string-length (quote-prefix next))))))
+       (define joined-start (and w (+ line-start* (- (+ next-base (caar w)) prev-end* 1))))
+       (if (and w (<= (- (+ next-base (cdar w)) joined-start) width))
+           (loop (add1 i) next-base (caar w)
+                 (cons (list prev-end* (+ next-base (caar w)) " ") edits*)
+                 joined-start
+                 prev-end*)
+           edits*))]
+    [else '()]))
+
+;; Where a position lands once edits are made, staying put at an edit's start
+(define (position-after-edits pos edits)
+  (for/fold ([p pos]) ([e (in-list edits)] #:when (< (first e) pos))
+    (+ p (string-length (third e)) (- (first e) (min pos (second e))))))
+
+(define (fill-unit lines idx width)
+  (and (fillable? lines idx)
+       (let ([top (let loop ([i idx])
+                    (if (or (item-start lines i) (unit-start? lines i))
+                        i
+                        (loop (sub1 i))))]
+             [bottom (unit-bottom lines idx)])
          (list top bottom (rewrap lines top bottom width)))))

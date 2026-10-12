@@ -10,6 +10,7 @@
          racket/file
          gregor
          splitflap
+         "dates.rkt"
          "structs.rkt"
          "main.rkt"
          "log.rkt")
@@ -58,7 +59,8 @@
   (define slug (hash-ref metas 'slug))
   (define title (page-link-title pl))
   (define relative-url (page-link-url pl))
-  (define date-val (hash-ref metas 'date))
+  (define published (meta->moment (hash-ref metas 'date)))
+  (define updated (page-link-updated metas published))
 
   (define relative-for-join
     (if (string-prefix? relative-url "/")
@@ -66,23 +68,26 @@
         relative-url))
   (define absolute-url (url-join site-url relative-for-join))
   (define item-tag-uri (append-specific feed-tag-uri (normalize-tag-specific slug)))
-  (define pub-moment (date-string->moment date-val))
   (define content (get-feed-content slug render-fn contexts-by-slug))
 
   (feed-item item-tag-uri
              absolute-url
              title
              author
-             pub-moment
-             pub-moment
+             published
+             updated
              content))
 
-(define (date-string->moment date-val)
-  (cond
-    [(moment? date-val) date-val]
-    [(date? date-val) (infer-moment (date->iso8601 date-val))]
-    [(string? date-val) (infer-moment date-val)]
-    [else (infer-moment)]))
+(define (page-link-updated metas published)
+  (define raw (hash-ref metas 'updated #f))
+  (define updated (if raw (meta->moment raw) published))
+  (unless (moment>=? updated published)
+    (raise-arguments-error 'page-link->feed-item
+                           "updated is earlier than date"
+                           "page" (hash-ref metas 'slug)
+                           "updated" raw
+                           "date" (hash-ref metas 'date)))
+  updated)
 
 (define (get-feed-content slug render-fn contexts-by-slug)
   (define info (current-site-info))

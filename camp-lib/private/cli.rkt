@@ -7,6 +7,7 @@
          racket/file
          racket/format
          racket/list
+         racket/lazy-require
          racket/logging
          racket/match
          racket/path
@@ -18,13 +19,15 @@
          "main.rkt"
          "build.rkt"
          "book-build.rkt"
-         "serve.rkt"
          "watch.rkt"
          "structs.rkt"
          "draft.rkt"
          (only-in "output.rkt" format-duration with-timing count-files-in-directory)
          "log.rkt"
          "new-site.rkt")
+
+;; The web server is loaded only by the serve command
+(lazy-require ["serve.rkt" (start-server)])
 
 (provide main)
 
@@ -305,8 +308,6 @@
   (define shutdown-server
     (start-server (get-output-dir) #:port port #:watch? watch? #:log-format log-format))
 
-  (define stop-watcher (box void))
-
   (define (current-time-str)
     (define now (seconds->date (current-seconds)))
     (define (zpad n) (if (< n 10) (~a "0" n) (~a n)))
@@ -323,13 +324,11 @@
         (case change-type
           [(config)
            (log-camp-info (~a "  " (dim "Reloading site config...")))
-           ((unbox stop-watcher))
            (with-handlers ([exn:fail?
                             (λ (e)
                               (log-camp-info (~a "  " (red "✗") " Config error:\n" (exn->string e)))
                               #f)])
              (reload-site!)
-             (start-watching!)
              (do-rebuild!))]
 
           [(static)
@@ -360,17 +359,17 @@
         (path->string (file-name-from-path p))
         (path->string rel)))
 
-  (define (start-watching!)
-    (define paths (get-watch-paths current-site site-config-path))
-    (set-box! stop-watcher
-              (start-watcher! paths handle-change)))
-
-  (when watch?
-    (start-watching!))
+  ;; The watch paths are computed per watcher iteration, so a config reload
+  ;; takes effect without restarting the watcher (handle-change runs on its
+  ;; thread and cannot stop it)
+  (define stop-watcher
+    (if watch?
+        (start-watcher! (λ () (get-watch-paths current-site site-config-path)) handle-change)
+        void))
 
   (define (cleanup!)
     (log-camp-info (~a "  " (dim "Shutting down...")))
-    ((unbox stop-watcher))
+    (stop-watcher)
     (shutdown-server)
     (when (and manifest-path (file-exists? manifest-path))
       (delete-file manifest-path))

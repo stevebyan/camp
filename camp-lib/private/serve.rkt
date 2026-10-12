@@ -273,6 +273,16 @@
 ;; ============================================================================
 ;; Static file dispatcher helpers
 
+;; Support mime types for markdown; add utf-8 for text
+(define (file-mime-type p)
+  (define type
+    (if (regexp-match? #rx"[.](md|markdown)$" (~a p))
+        #"text/markdown"
+        (path-mime-type p)))
+  (if (and type (regexp-match? #rx#"^(text/|application/(javascript|json))" type))
+      (bytes-append type #"; charset=utf-8")
+      type))
+
 (define (path->headers p)
   (cond
     [(string-suffix? (~a p) ".gz")
@@ -333,7 +343,7 @@
               (sequencer:make
                (static-files:make
                 #:url->path url->path/current-dir
-                #:path->mime-type path-mime-type
+                #:path->mime-type file-mime-type
                 #:path->headers path->headers)
                (directory-lister:make #:url->path url->path/current-dir)
                (lift:make not-found))

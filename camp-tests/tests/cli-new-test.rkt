@@ -98,7 +98,62 @@
   (define page-content (file->string (build-path site-dir "pages" "index.md.rkt")))
   (check-regexp-match (regexp (format "#lang punct ~a" site-name))
                       page-content
-                      "pages should use #lang punct <sitename>"))
+                      "pages should use #lang punct <sitename>")
+
+  ;; Check the starter posts showcase cross-references
+  (define welcome-content (file->string (build-path site-dir "blog" "welcome.md.rkt")))
+  (check-regexp-match #rx"•defterm{" welcome-content
+                      "welcome post should define a term")
+  (check-regexp-match #rx"•term{" post-content
+                      "first post should reference a term")
+  (check-regexp-match #rx"•page-ref\\[" post-content
+                      "first post should reference a page")
+
+  ;; Check render.rkt shows the site title
+  (define render-content (file->string (build-path site-dir "render.rkt")))
+  (check-regexp-match #rx"\"My Test Site\"" render-content
+                      "render.rkt should contain the site title")
+
+  ;; Check style.css styles every cross-reference hook
+  (define css-content (file->string (build-path site-dir "static" "style.css")))
+  (for ([hook '("dfn.term-def" "a.term-ref" ".unresolved-ref" "dfn.term-def:target")])
+    (check-true (string-contains? css-content hook)
+                (format "style.css should style ~a" hook))))
+
+;; ---------------------------------------------------------------------------
+;; Test: the new site builds without warnings, and its references resolve
+
+(define (run-build)
+  (define output (open-output-string))
+  (define result
+    (parameterize ([current-output-port output]
+                   [current-error-port output])
+      (putenv "PLTCOLLECTS" (format "~a:" test-dir))
+      (begin0
+        (system*/exit-code (find-executable-path "raco")
+                           "camp" "build" "--drama"
+                           (build-path site-dir "site.rkt"))
+        (environment-variables-set! (current-environment-variables)
+                                    #"PLTCOLLECTS" #f))))
+  (values result (get-output-string output)))
+
+(let-values ([(exit-build out-build) (run-build)])
+  (check-equal? exit-build 0
+                (format "new site should build without warnings:\n~a" out-build))
+
+  (define built-posts
+    (for/list ([f (in-directory site-dir)]
+               #:when (regexp-match? #rx"first-post/index\\.html$" (path->string f)))
+      (file->string f)))
+  (check-equal? (length built-posts) 1
+                "should build the first post")
+  (for ([html built-posts])
+    (check-regexp-match #rx"class=\"term-ref\"" html
+                        "built post should link to a term definition")
+    (check-regexp-match #rx"class=\"page-ref\"" html
+                        "built post should link to a page")
+    (check-false (string-contains? html "unresolved-ref")
+                 "built post should have no unresolved references")))
 
 ;; ---------------------------------------------------------------------------
 ;; Test: existing directory produces error

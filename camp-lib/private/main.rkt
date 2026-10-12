@@ -20,6 +20,7 @@
          load-site
          filter-pages
          current-site-info
+         current-output-dir
          get-collection
          get-taxonomy-terms
          get-taxonomy-pages
@@ -33,9 +34,10 @@
          pagination-nav)
 
 ;; ---------------------------------------------------------------------------
-;; Site-Info Parameter
+;; Build Parameters
 
 (define current-site-info (make-parameter #f))
+(define current-output-dir (make-parameter #f))
 
 ;; ---------------------------------------------------------------------------
 ;; Site Resolution
@@ -109,8 +111,7 @@
       [else
        (resolve-module-path mod-path #f)]))
   (define site-root (simplify-path (build-path resolved 'up)))
-  (when (live-reload?)
-    (live-cache-root! site-root))
+  (site-cache-root! site-root)
   (rerequire! resolved)
   (define site-config (dynamic-require resolved 'toml))
   (define get-info (get-info/full site-root))

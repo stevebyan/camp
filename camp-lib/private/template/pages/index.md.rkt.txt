@@ -5,4 +5,4 @@ title: Home
 output-path: /
 ---
 
-Welcome to your new Camp site.
+Welcome to your new Camp site. If you are new here, start with •page-ref["welcome"].

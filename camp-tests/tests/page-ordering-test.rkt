@@ -34,18 +34,18 @@
 ;; ---------------------------------------------------------------------------
 ;; parse-sort-value tests
 
-(test-case "parse-sort-value: parses ISO date strings to gregor dates"
-  (check-pred date? (parse-sort-value "2024-01-20" "date"))
-  (check-equal? (date->iso8601 (parse-sort-value "2024-01-20" "date"))
-                "2024-01-20"))
+(test-case "parse-sort-value: parses date strings to moments"
+  (check-pred moment? (parse-sort-value "2024-01-20" "date"))
+  (check-equal? (->date (parse-sort-value "2024-01-20" "date"))
+                (date 2024 1 20)))
 
 (test-case "parse-sort-value: returns non-date strings as-is for non-date keys"
   (check-equal? (parse-sort-value "some-title" "title") "some-title")
   (check-equal? (parse-sort-value "zebra" "name") "zebra"))
 
-(test-case "parse-sort-value: handles gregor date objects (pass-through)"
-  (define d (date 2024 3 15))
-  (check-equal? (parse-sort-value d "date") d))
+(test-case "parse-sort-value: converts gregor dates to moments for the date key"
+  (check-pred moment? (parse-sort-value (date 2024 3 15) "date"))
+  (check-equal? (parse-sort-value (date 2024 3 15) "published") (date 2024 3 15)))
 
 ;; ---------------------------------------------------------------------------
 ;; sort-pages tests
@@ -77,6 +77,33 @@
                        'taxonomies '()))
   (define sorted (sort-pages pages coll))
   (check-equal? (map cadr sorted) '("post-a" "post-b" "post-c")))
+
+(test-case "sort-pages: sorts same-day posts by time across offsets"
+  (define pages
+    (list (list #f "eleven" (make-mock-doc (hasheq 'date "2024-03-05 12:00+01:00")))
+          (list #f "fifteen" (make-mock-doc (hasheq 'date "2024-03-05T15:00Z")))
+          (list #f "fourteen" (make-mock-doc (hasheq 'date "2024-03-05T09:00-05:00")))))
+  (define coll (hasheq 'name "blog"
+                       'source "blog/*"
+                       'output-paths "*/"
+                       'order "descending"
+                       'sort-key "date"
+                       'taxonomies '()))
+  (check-equal? (map cadr (sort-pages pages coll)) '("fifteen" "fourteen" "eleven")))
+
+(test-case "sort-pages: date-only and timed posts sort together"
+  (parameterize ([current-timezone "America/Chicago"])
+    (define pages
+      (list (list #f "noon" (make-mock-doc (hasheq 'date "2024-03-05 12")))
+            (list #f "midnight" (make-mock-doc (hasheq 'date (date 2024 3 5))))
+            (list #f "next-day" (make-mock-doc (hasheq 'date "2024-03-06")))))
+    (define coll (hasheq 'name "blog"
+                         'source "blog/*"
+                         'output-paths "*/"
+                         'order "ascending"
+                         'sort-key "date"
+                         'taxonomies '()))
+    (check-equal? (map cadr (sort-pages pages coll)) '("midnight" "noon" "next-day"))))
 
 (test-case "sort-pages: sorts by title ascending"
   (define pages

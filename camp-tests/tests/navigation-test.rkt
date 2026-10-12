@@ -112,7 +112,7 @@
     (define coll-name (page-collection-name pg))
     (define taxonomy-index (site-info-taxonomy-index info))
     (define ctx ((dynamic-require 'camp/private/build 'build-context)
-                 pg coll-name taxonomy-index))
+                 pg coll-name taxonomy-index (site-root site)))
     (thunk ctx)))
 
 (test-case "integration: prev returns previous page in collection"

@@ -15,6 +15,7 @@
          html-printer
          "structs.rkt"
          "collections.rkt"
+         "dates.rkt"
          "filter.rkt"
          "path-map.rkt"
          "log.rkt"
@@ -28,6 +29,7 @@
          copy-static-files
          sync-static-files
          build-context
+         doc-output-path
          output-path->url)  ; re-exported from collections.rkt
 
 ;; ---------------------------------------------------------------------------
@@ -39,9 +41,10 @@
   (define collections (site-collections site))
 
   (define all-pages
-    (for/fold ([pages '()])
-              ([coll (in-list collections)])
-      (append pages (collect-collection root-dir source-ext coll))))
+    (parameterize ([current-site-timezone (site-timezone site)])
+      (for/fold ([pages '()])
+                ([coll (in-list collections)])
+        (append pages (collect-collection root-dir source-ext coll)))))
 
   (define page-index (build-page-index all-pages))
   (define term-index (build-term-index all-pages))
@@ -82,12 +85,18 @@
                                     "no page found with slug: ~a" slug))))
   (define ctx (build-context pg
                              (page-collection-name pg)
-                             (site-info-taxonomy-index info)))
-  (parameterize ([current-site-info info])
+                             (site-info-taxonomy-index info)
+                             (site-root site)))
+  (parameterize ([current-site-info info]
+                 [current-output-dir (site-output-dir site)]
+                 [current-site-timezone (site-timezone site)])
     (proc (page-doc pg) ctx)))
 
 ;; ---------------------------------------------------------------------------
 ;; Output Path Helpers
+
+(define (site-output-dir site)
+  (build-path (site-root site) (site-output-folder site)))
 
 (define (normalize-output-path path-str)
   (define without-leading
@@ -120,13 +129,7 @@
   (define pages
     (for/list ([raw-page (in-list sorted-pages)])
       (match-define (list source-path slug doc) raw-page)
-      (define date-val (get-page-date doc))
-      (define output-path
-        (let ([override (meta-ref doc 'output-path)])
-          (if override
-              (normalize-output-path override)
-              (format-output-path output-pattern slug date-val (document-metas doc)))))
-      (page source-path output-path doc slug coll-name)))
+      (page source-path (doc-output-path doc slug output-pattern) doc slug coll-name)))
 
   (define seen (make-hash))
   (for ([p (in-list pages)])
@@ -142,13 +145,15 @@
 
   pages)
 
+(define (doc-output-path doc slug output-pattern)
+  (define override (meta-ref doc 'output-path))
+  (if override
+      (normalize-output-path override)
+      (format-output-path output-pattern slug (get-page-date doc) (document-metas doc))))
+
 (define (get-page-date doc)
   (define raw-date (meta-ref doc 'date))
-  (cond
-    [(not raw-date) #f]
-    [(date-provider? raw-date) raw-date]
-    [(string? raw-date) (iso8601->date raw-date)]
-    [else #f]))
+  (and raw-date (meta->moment raw-date)))
 
 ;; ---------------------------------------------------------------------------
 ;; Page Index
@@ -334,9 +339,11 @@
 ;; Build Pass
 
 (define (build! site info)
-  (parameterize ([current-site-info info])
+  (define output-dir (site-output-dir site))
+  (parameterize ([current-site-info info]
+                 [current-output-dir output-dir]
+                 [current-site-timezone (site-timezone site)])
     (define root-dir (site-root site))
-    (define output-dir (build-path root-dir (site-output-folder site)))
     (define static-dir (build-path root-dir (site-static-folder site)))
     (define collections (site-collections site))
     (define taxonomy-index (site-info-taxonomy-index info))
@@ -355,7 +362,7 @@
     (define contexts-by-slug
       (for/hash ([p (in-list pages)])
         (define coll-name (page-collection-name p))
-        (define ctx (build-context p coll-name taxonomy-index))
+        (define ctx (build-context p coll-name taxonomy-index root-dir))
         (values (page-slug p) ctx)))
 
     ;; Render pages using stored contexts
@@ -380,7 +387,7 @@
          ;; Build paginated pages
          (set! page-count
                (+ page-count
-                  (build-paginated-page! p pagination-result render-fn output-dir info
+                  (build-paginated-page! p ctx pagination-result render-fn output-dir info
                                          generated-files)))]
         [else
          ;; Normal page rendering
@@ -398,14 +405,11 @@
 
     (generate-feeds! site info contexts-by-slug)
 
-    ;; Remove orphaned HTML files from previous builds
-    (define static-rel
-      (and (directory-exists? static-dir)
-           (path->string (find-relative-path (site-root site) static-dir))))
+    ;; Remove orphaned HTML files from previous builds. Static files are copied to the top of the
+    ;; output folder, so an output file came from static/ when the same relative path exists there.
     (define (under-static? p)
-      (and static-rel
-           (let ([rel (path->string (find-relative-path output-dir p))])
-             (string-prefix? rel static-rel))))
+      (and (directory-exists? static-dir)
+           (file-exists? (build-path static-dir (find-relative-path output-dir p)))))
     (define deleted-rel-paths
       (for/list ([p (in-directory output-dir)]
                  #:when (and (regexp-match? #rx"\\.html$" (path->string p))
@@ -421,7 +425,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Paginated Page Building
 
-(define (build-paginated-page! page pc render-fn output-dir info generated-files)
+(define (build-paginated-page! page base-ctx pc render-fn output-dir info generated-files)
   (define coll-name (paginated-content-collection-name pc))
   (define per-page (paginated-content-per-page pc))
   (define page-slug-str (paginated-content-page-slug pc))
@@ -496,12 +500,12 @@
 
     ;; Build context for this page
     (define ctx
-      (hasheq 'slug (if (= page-num 1)
-                        (page-slug page)
-                        (format "~a/~a/~a" (page-slug page) page-slug-str page-num))
-              'url current-url
-              'collection (page-collection-name page)
-              'taxonomies (hash)))
+      (hash-set* base-ctx
+                 'slug (if (= page-num 1)
+                           (page-slug page)
+                           (format "~a/~a/~a" (page-slug page) page-slug-str page-num))
+                 'url current-url
+                 'taxonomies (hash)))
 
     ;; Render through normal render function
     (define html-xexpr (render-fn synthetic-doc ctx))
@@ -529,15 +533,17 @@
 ;; ---------------------------------------------------------------------------
 ;; Context Building
 
-(define (build-context p coll-name taxonomy-index)
-  (define slug (page-slug p))
-  (define url (output-path->url (page-output-path p)))
+(define (build-context p coll-name taxonomy-index root)
   (define doc (page-doc p))
-  (define page-taxonomies (build-page-taxonomies doc taxonomy-index coll-name))
-  (hasheq 'slug slug
-          'url url
-          'collection coll-name
-          'taxonomies page-taxonomies))
+  (context (page-slug p)
+           (output-path->url (page-output-path p))
+           coll-name
+           (build-page-taxonomies doc taxonomy-index coll-name)
+           (source-path->string root (page-source-path p))))
+
+(define (source-path->string root path)
+  (string-join (map path-element->string (explode-path (find-relative-path root path)))
+               "/"))
 
 (define (build-page-taxonomies doc taxonomy-index coll-name)
   (define coll-taxes (hash-ref taxonomy-index coll-name #f))

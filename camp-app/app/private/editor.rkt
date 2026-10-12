@@ -26,9 +26,9 @@
          camp/app/private/fonts
          camp/app/private/gui
          (only-in camp/app/private/settings
-                  @vim-mode @fill-column @line-numbers? @editor-geometry))
+                  @vim-mode @fill-column @auto-fill? @line-numbers? @editor-geometry))
 
-(provide open-editor!)
+(provide open-editor! close-all-editors!)
 
 ;; ============================================================================
 ;; Text class
@@ -101,6 +101,9 @@
     (define/augment (after-delete start len)
       (send completion-timer start completion-idle-ms #t)
       (inner (void) after-delete start len))
+    (define/augment (on-close)
+      (send completion-timer stop)
+      (inner (void) on-close))
     (define/override (get-all-words)
       (define fn (get-filename))
       (remove-duplicates
@@ -116,9 +119,10 @@
              delete insert set-position begin-edit-sequence end-edit-sequence)
     (define/private (status! msg)
       (send (get-top-level-window) set-vim-status-message msg))
+    (define/private (buffer-lines)
+      (list->vector (regexp-split #rx"\n" (get-text))))
     (define/public (fill-paragraph!)
-      (define lines (list->vector (regexp-split #rx"\n" (get-text))))
-      (define result (fill-unit lines
+      (define result (fill-unit (buffer-lines)
                                 (position-paragraph (get-start-position))
                                 (obs-peek @fill-column)))
       (cond
@@ -137,7 +141,36 @@
             (delete start end)
             (insert filled start)
             (end-edit-sequence)])
-         (set-position (+ start (string-length filled)))]))))
+         (set-position (+ start (string-length filled)))]))
+
+    ;; Auto-fill: text% soft-wraps by pixel width, so only a hard break as a
+    ;; typed character overflows the column agrees with fill-paragraph! An
+    ;; insert at the caret would push the caret past it, so the caret is placed;
+    ;; a space never fills, so the caret is never inside a run that a break eats.
+    (define/private (auto-fill!)
+      (define caret (get-start-position))
+      (define para (position-paragraph caret))
+      (define start (paragraph-start-position para))
+      (define width (obs-peek @fill-column))
+      (define edits
+        (if (> (- (paragraph-end-position para) start) width)
+            (auto-fill-edits (buffer-lines) para width)
+            '()))
+      (unless (null? edits)
+        (begin-edit-sequence)
+        (for ([e (in-list edits)])
+          (insert (third e) (+ start (first e)) (+ start (second e))))
+        (set-position (+ start (position-after-edits (- caret start) edits)))
+        (end-edit-sequence)))
+    (define/override (on-local-char e)
+      (super on-local-char e)
+      (define k (send e get-key-code))
+      (when (and (obs-peek @auto-fill?)
+                 (char? k)
+                 (char-graphic? k)
+                 (not (send e get-meta-down))
+                 (not (send e get-control-down)))
+        (auto-fill!)))))
 
 ;; The text block is centered, iA Writer style: the left padding is whatever
 ;; centers a wrap-column-wide block in the view, never less than min-margin,
@@ -464,6 +497,12 @@
 (define (editor-frames)
   (for/list ([r (in-hash-values open-editors)]) (renderer-root r)))
 
+;; Closes every editor window, offering to save each modified buffer; #f if
+;; the user cancels, which leaves that window and any after it open
+(define (close-all-editors!)
+  (for/and ([f (in-list (editor-frames))])
+    (send f close-editor-window!)))
+
 (define (find-editor-canvas w)
   (cond
     [(is-a? w editor-canvas%) w]
@@ -567,15 +606,19 @@
                    [(positive? turns) (retry (sub1 turns))]))
            #f)))
       (define/public (close-editor-window!)
-        (when (send this can-close?)
-          (send this on-close)
-          (send this show #f)))
+        (and (send this can-close?)
+             (begin (send this on-close)
+                    (send this show #f)
+                    #t)))
       (define/augment (can-close?)
         (and (confirm-close! ed this) (inner #t can-close?)))
       ;; renderer-destroy is deferred: destroying the renderer from inside
       ;; its own frame's on-close re-enters gui-easy mid-teardown
       (define/augment (on-close)
         (hash-remove! open-editors key)
+        ;; framework frames send this; without it the autoload monitor keeps
+        ;; watching the file on behalf of the dead window
+        (send ed on-close)
         (obs-unobserve! @vim-mode vim-sync)
         (obs-unobserve! @line-numbers? line-numbers-sync)
         (obs-unobserve! @gutter-font gutter-font-sync)

@@ -32,13 +32,6 @@
 (color-prefs:add-color-scheme-entry 'camp:vim-selection-color
                                     "lightsteelblue" (make-color 70 90 120))
 
-;; macOS: an explicit mode also sets the app's appearance, so system-drawn
-;; parts — the selection color above all — follow the editor, not the system
-(define set-app-appearance!
-  (if (eq? (system-type 'os) 'macosx)
-      (dynamic-require 'camp/app/private/mac-appearance 'set-app-appearance!)
-      void))
-
 ;; Punct's Markdown categories, named like framework's own token entries so
 ;; the colorer's style lookup finds them (design §4). Built-in defaults echo
 ;; the standard type each such token also carries: (category light dark
@@ -125,16 +118,15 @@
 ;; ============================================================================
 ;; Mode
 
+;; The app's own appearance, which the 'platform case reads back, is set by
+;; app-appearance.rkt
 (define (apply-mode!)
   (match (obs-peek @appearance-mode)
-    ['light (set-app-appearance! 'light)
-            (preferences:set 'framework:white-on-black-mode? #f)
+    ['light (preferences:set 'framework:white-on-black-mode? #f)
             (color-prefs:set-current-color-scheme 'classic)]
-    ['dark (set-app-appearance! 'dark)
-           (preferences:set 'framework:white-on-black-mode? #t)
+    ['dark (preferences:set 'framework:white-on-black-mode? #t)
            (color-prefs:set-current-color-scheme 'white-on-black)]
-    [_ (set-app-appearance! #f)
-       (preferences:set 'framework:white-on-black-mode? 'platform)
+    [_ (preferences:set 'framework:white-on-black-mode? 'platform)
        (color-prefs:set-current-color-scheme
         (if (white-on-black-panel-scheme?) 'white-on-black 'classic))]))
 

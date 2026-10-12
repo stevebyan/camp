@@ -7,6 +7,8 @@
 (provide render-page
          render-post)
 
+(define site-title "@title")
+
 (define (layout title body-content)
   `(html
     (head
@@ -16,11 +18,14 @@
      (link ((rel "stylesheet") (href ,(format "/style.css?~a" (current-seconds)))))
      (link ((rel "alternate") (type "application/atom+xml") (href "/feed.atom"))))
     (body
-     (div ((class "paper"))
-      (header
-       (nav (a ((href "/")) "Home") " · " (a ((href "/feed.atom")) "Feed")))
-      (main ,@"@"body-content)
-      (footer (p "Powered by Camp"))))))
+     (header ((class "site-header"))
+      (a ((class "site-title") (href "/")) ,site-title)
+      (nav (a ((href "/")) "Home") (a ((href "/feed.atom")) "Feed")))
+     (main ,@"@"body-content)
+     (footer "Built with Camp"))))
+
+(define (date->time date)
+  `(time ((datetime ,(~d "yyyy-MM-dd" date))) ,(~d "d MMM yyyy" date)))
 
 (define (render-page doc ctxt)
   (define title (or (meta-ref doc 'title) "Untitled"))
@@ -32,19 +37,17 @@
     (if (equal? slug "index")
         (let ([posts (get-collection "blog")])
           `((section ((class "posts"))
-             (h2 "Recent Posts")
+             (h2 "Recent posts")
              (ul
               ,@"@"(for/list ([p posts])
                    `(li
                      (a ((href ,(page-link-url p)))
                         ,(page-link-title p))
                      ,(let ([date (hash-ref (page-link-metas p) 'date #f)])
-                        (if date
-                            `(span ((class "date")) " · " ,(~d "d MMM yyyy" date))
-                            ""))))))))
+                        (if date (date->time date) ""))))))))
         '()))
 
-  (layout title `((article (h1 ,title) ,@"@"body ,@"@"blog-listing))))
+  (layout title `((article (header (h1 ,title)) ,@"@"body ,@"@"blog-listing))))
 
 (define (render-post doc ctxt)
   (define title (or (meta-ref doc 'title) "Untitled"))
@@ -52,8 +55,7 @@
   (define body (camp-doc->html-xexpr doc))
   (layout title
           `((article ((class "post"))
-             (h1 ,title)
-             ,(if date `(time ((datetime ,(~d "yyyy-MM-dd" date))) ,(~d "d MMM yyyy" date)) "")
+             (header (h1 ,title) ,(if date (date->time date) ""))
              ,@"@"body
              (nav ((class "pagination"))
                   ,(let ([p (prev ctxt)])

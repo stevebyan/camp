@@ -4,4 +4,7 @@
 (define camp-site "site.rkt")
 
 (define deps '("base"
-               "camp-lib"))
+               "camp-lib"
+               "gregor-lib"
+               "punct-lib"
+               "toml-config-lib"))

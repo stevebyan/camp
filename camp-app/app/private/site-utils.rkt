@@ -3,10 +3,10 @@
 ;; Pure utility functions for site operations
 
 (require camp
-         (only-in camp/private/build output-path->url)
+         (only-in camp/private/build doc-output-path output-path->url)
          punct/doc
          (only-in punct/fetch meta-ref)
-         (only-in gregor iso8601->date date-provider?)
+         (only-in camp/private/dates current-site-timezone)
          racket/exn
          racket/list
          racket/path
@@ -53,21 +53,14 @@
   (define root (site-root site))
   (define source-ext (site-sources site))
   (define pages
-    (for/list ([coll (in-list (site-collections site))])
-      (define source-dir
-        (build-path root (source-pattern->directory (collection-source coll))))
-      (if (equal? (simplify-path source-dir) (simplify-path folder))
-          (get-pages-for-directory folder source-ext coll)
-          '())))
+    (parameterize ([current-site-timezone (site-timezone site)])
+      (for/list ([coll (in-list (site-collections site))])
+        (define source-dir
+          (build-path root (source-pattern->directory (collection-source coll))))
+        (if (equal? (simplify-path source-dir) (simplify-path folder))
+            (get-pages-for-directory folder source-ext coll)
+            '()))))
   (list->vector (flatten pages)))
-
-(define (get-page-date-val doc)
-  (define raw (meta-ref doc 'date))
-  (cond
-    [(not raw) #f]
-    [(date-provider? raw) raw]
-    [(string? raw) (with-handlers ([exn:fail? (λ (_) #f)]) (iso8601->date raw))]
-    [else #f]))
 
 (define (get-pages-for-directory folder source-ext coll)
   (define output-pattern (collection-output-paths coll))
@@ -76,12 +69,12 @@
                          (is-source? p source-ext)))
     (define doc (get-doc/safe p))
     (define slug (or (meta-ref doc 'slug) (path->slug p source-ext)))
-    (define date-val (get-page-date-val doc))
     (define url
       (with-handlers ([exn:fail? (λ (_) (path->string (file-name-from-path p)))])
-        (output-path->url (format-output-path output-pattern slug date-val (document-metas doc)))))
+        (output-path->url (doc-output-path doc slug output-pattern))))
     (vector (or (meta-ref doc 'date) "")
             (or (meta-ref doc 'title) "Untitled")
+            (if (meta-ref doc 'draft?) "Draft" "")
             url
             p)))
 

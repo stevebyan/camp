@@ -15,6 +15,7 @@
          punct/doc
          punct/fetch
          "structs.rkt"
+         "dates.rkt"
          "main.rkt"
          "build.rkt"
          "filter.rkt"
@@ -194,7 +195,8 @@
   ;; Gather parts and chapters
   (log-camp-info "gathering book parts...")
   (define parts
-    (parameterize ([current-site-info site-info])
+    (parameterize ([current-site-info site-info]
+                   [current-site-timezone (site-timezone site)])
       (gather-book-parts book site site-info)))
 
   ;; Load and call the user's render function
@@ -202,7 +204,8 @@
   (define render-fn (apply dynamic-require (book-render-with book)))
 
   (define rendered-content
-    (parameterize ([current-site-info site-info])
+    (parameterize ([current-site-info site-info]
+                   [current-site-timezone (site-timezone site)])
       (render-fn parts)))
 
   ;; Write Typst file

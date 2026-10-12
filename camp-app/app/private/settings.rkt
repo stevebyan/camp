@@ -13,8 +13,10 @@
 (provide @sites
          @site-selection
          @editor
+         @external-editor
          @vim-mode
          @fill-column
+         @auto-fill?
          @line-numbers?
          @font-slots
          @font-slot
@@ -103,9 +105,14 @@
 
 (define @editor (make-@pref 'editor ""))
 
+;; The app last chosen as external editor, kept while the built-in one is in use
+(define @external-editor (make-@pref 'external-editor (obs-peek @editor)))
+
 (define @vim-mode (make-@pref 'vim-mode #f))
 
 (define @fill-column (make-@pref 'fill-column 80))
+
+(define @auto-fill? (make-@pref 'auto-fill #t))
 
 (define @line-numbers? (make-@pref 'line-numbers #t))
 

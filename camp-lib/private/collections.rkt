@@ -9,6 +9,7 @@
          punct/fetch
          punct/doc
          gregor
+         "dates.rkt"
          "structs.rkt")
 
 (provide source-pattern->directory
@@ -67,10 +68,10 @@
 ;; ---------------------------------------------------------------------------
 ;; Source Loading
 
-;; Unlike punct's get-doc, registers the module with rerequire so later edits
-;; to the source are picked up within a long-running process. A source module
-;; first loaded any other way can never be reloaded in that process, so all
-;; doc loading must go through this function.
+;; Unlike punct's get-doc, loads through rerequire! so later edits to the
+;; source or its dependencies are picked up within a long-running process. A
+;; source module first loaded any other way can never be reloaded in that
+;; process, so all doc loading must go through this function.
 (define (load-doc p)
   (rerequire! p)
   (dynamic-require p 'doc))
@@ -118,10 +119,7 @@
 ;; Page Sorting
 
 (define (parse-sort-value val sort-key)
-  (cond
-    [(date? val) val]
-    [(and (equal? sort-key "date") (string? val)) (iso8601->date val)]
-    [else val]))
+  (if (equal? sort-key "date") (meta->moment val) val))
 
 (define (sort-pages pages coll)
   (define sort-key (collection-sort-key coll))
@@ -144,6 +142,7 @@
   (define (compare-values a b)
     (define (less-than? x y)
       (cond
+        [(and (moment? x) (moment? y)) (moment<? x y)]
         [(and (date? x) (date? y)) (date<? x y)]
         [(and (string? x) (string? y)) (string<? x y)]
         [(and (number? x) (number? y)) (< x y)]

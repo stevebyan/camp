@@ -1,6 +1,7 @@
 #lang scribble/manual
 
-@(require "doc-util.rkt")
+@(require "doc-util.rkt"
+          (for-label camp))
 
 @title[#:style 'quiet #:tag "cli"]{Command-Line Interface}
 
@@ -65,12 +66,14 @@ rebuilds.
 When watching is enabled, Camp monitors source documents, render modules, static files, and the
 site configuration. Changes trigger appropriate actions: source document or render module changes
 trigger a full rebuild, static file changes sync to the output folder, and configuration changes
-reload the site and rebuild.
+reload the site and rebuild. Camp checks the modification times of these files twice a second, so
+an edit, a new file or a deleted file is noticed within about half a second of being saved.
 
-Watching also deletes any compiled bytecode (@filepath{compiled} folders) found under the site's
-directory, since modules first loaded from @tt{raco setup}-produced bytecode cannot be reloaded
-after edits. The site's modules are compiled from source for the duration of the session; this
-does not affect @tt{raco camp build}, which uses compiled bytecode normally.
+A rebuild renders every page, but reloads only the modules an edit affects: the edited module and
+every source document or render module that depends on it, directly or through other modules of
+the site. Each reload is logged as @tt{Reloaded} followed by the module's path. While watching,
+the site's modules are compiled into a private bytecode cache (see @racket[load-site]); this does
+not affect @tt{raco camp build}, which uses and updates the regular compiled bytecode.
 
 The server provides directory listings for folders without an @filepath{index.html} and returns
 a styled 404 page for missing files.

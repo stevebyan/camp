@@ -113,7 +113,39 @@ render-with = "(camp-demo/feeds feed-content)" # same as default-render
                (list @racket[static-folder] @racket[path-string?] @racket["static"] "Static assets directory")
                (list @racket[output-folder] @racket[path-string?] @racket["publish"] @nonbreaking{Build output directory})
                (list @racket[deploy-script] @racket[path-string?] @racket[#f] @nonbreaking{Deployment script path})
-               (list @nonbreaking[@racket[default-render]] @racket[render-spec?] @racket[#f] @nonbreaking{Default render function}))]
+               (list @nonbreaking[@racket[default-render]] @racket[render-spec?] @racket[#f] @nonbreaking{Default render function})
+               (list @racket[timezone] @racket[timezone-name?] @racket[#f] @nonbreaking{Time zone for dates (see @secref["ref-site-dates"])}))]
+
+@defproc[(timezone-name? [v any/c]) boolean?]{
+
+ Returns @racket[#t] if @racket[_v] is a string naming a time zone in the IANA time zone database.
+
+@examples[
+ #:eval e
+ (timezone-name? "America/Chicago")
+ (timezone-name? "Etc/UTC")
+ (timezone-name? "Central")]
+
+}
+
+@subsection[#:tag "ref-site-dates"]{Dates and time zones}
+
+Camp reads the @tt{date} metadata of each page as a @racket[moment]. The value can be a string in
+any format accepted by @racket[infer-moment]: a date such as @racket["2025-01-15"], optionally
+followed by a time (after @litchar{T} or a space) and a UTC offset, as in
+@racket["2025-01-15T09:30"] or @racket["2025-01-15 09:30-05:00"]. It can also be a gregor
+@racket[date], @racket[datetime] or @racket[moment]. Any other value, including an empty string,
+raises an exception when the site is collected.
+
+A date without a time is taken to be the start of that day. If the site has no @racket[timezone]
+setting, dates without an offset are in @racket[current-timezone] (normally the time zone of the
+computer building the site), and dates with an offset keep it.
+
+If the site sets @racket[timezone], dates without an offset are in that time zone, and dates with an
+offset are converted to it. A converted date refers to the same instant (it is @racket[moment=?] to
+the original), but its date and time fields may change: @racket["2025-01-15T23:30-08:00"] on a site
+with @racket[timezone] set to @racket["Etc/UTC"] falls on January 16 in output paths and
+@racket[~d].
 
 @section[#:tag "ref-site-collections"]{Collections}
 
@@ -177,6 +209,17 @@ render functions:
 
 The @racket[ctxt] argument is a @racket[context] whch provides access to the page's canonical URL,
 enabling feed content to include links back to the original page on your site.
+
+Every page in the feed's collections becomes an entry, except drafts and pages without a @tt{date}.
+The page's @tt{date} is the entry's publication time. A page can also have an @tt{updated} value, in
+any format accepted for @tt{date} (see @secref["ref-site-dates"]); it becomes the entry's update time,
+which is otherwise the same as its @tt{date}. An @tt{updated} value earlier than the @tt{date} raises
+an exception.
+
+Entries are ordered by update time, most recent first, and the most recent update time is also the
+update time of the feed itself. Adding or changing @tt{updated} on an older page therefore moves it
+to the top of the feed. RSS items have only a publication date, so in RSS feeds @tt{updated} affects
+only the order of items and the feed's @tt{lastBuildDate}.
 
 @defproc[(feed-filename? [v any/c]) boolean?]{
                                               
@@ -302,6 +345,7 @@ information on hash-views, see @other-doc['(lib "hash-view/hash-view.scrbl")].
                    [racket-collection (or/c string? #f) #:default #f]
                    [deploy-script (or/c string? #f) #:default #f]
                    [default-render (or/c list? #f) #:default #f]
+                   [timezone (or/c timezone-name? #f) #:default #f]
                    [feeds (listof feed-config?) #:default '()])]{
 
 A @tech{hash-view} representing a @tech{site} configuration. A site is most commonly defined using
@@ -351,14 +395,19 @@ Calling @racket[load-site] again in the same process reflects any changes saved 
 configuration module in the meantime; the GUI app and @tt{raco camp serve} rely on this to
 reload the site when its configuration changes.
 
-When called in a live-reloading context (the GUI app, or @tt{raco camp serve} with watching
-enabled), @racket[load-site] also marks the site's directory as the boundary of a private
-bytecode cache (a @filepath{camp-live} subfolder of each @filepath{compiled} folder). Bytecode
-produced by @tt{raco setup} prevents modules from being reloaded after edits, so live sessions
-instead compile site modules into this cache without that restriction, and reuse it across
-sessions: unchanged modules never recompile. Bytecode produced by @tt{raco setup} or @tt{raco
-make} is neither loaded nor disturbed, so one-shot commands like @tt{raco camp build} keep
-their own compile cache.}
+@racket[load-site] marks the site's directory as the boundary of the site's compiled bytecode. In a
+one-shot command like @tt{raco camp build}, Camp compiles any site module whose bytecode is missing
+or older than its source before loading it, as @exec{raco make} would, so later builds load it
+without expanding it again. Modules outside the boundary are never compiled by Camp.
+
+In a live-reloading context (the GUI app, or @tt{raco camp serve} with watching enabled), the
+boundary instead delimits a private bytecode cache (a @filepath{camp-live} subfolder of each
+@filepath{compiled} folder). Bytecode produced by @tt{raco setup} prevents modules from being
+reloaded after edits, so live sessions instead compile site modules into this cache without that
+restriction, and reuse it across sessions: unchanged modules never recompile, though a module is
+rebuilt when a library it links against gets recompiled (for example by @tt{raco setup} after a
+Racket upgrade). Live sessions neither load nor disturb the regular bytecode, so one-shot commands
+keep their own compile cache.}
 
 @defproc[(resolve-site-spec [spec (or/c path? string? symbol?)]) (or/c path? #f)]{
 Resolves a site specification to a path. The @racket[_spec] can be:

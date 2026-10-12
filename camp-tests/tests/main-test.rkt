@@ -91,6 +91,11 @@
 (check-equal? (hash-ref test-context 'slug) "my-post")
 (check-equal? (hash-ref test-context 'url) "/blog/2024/01/my-post/")
 
+(check-false (context-source test-context))
+(check-equal? (context-source (context "my-post" "/my-post/" "blog" (hasheq)
+                                       "blog/my-post.md.rkt"))
+              "blog/my-post.md.rkt")
+
 ;; ---------------------------------------------------------------------------
 ;; load-site tests
 
@@ -159,6 +164,10 @@
 ;; Also works with gregor date objects
 (check-equal? (~d "d MMM yyyy" test-date) "15 Jan 2025")
 (check-equal? (~d "EEE, MMM d" (date 2024 12 25)) "Wed, Dec 25")
+
+;; Strings with a time and offset keep them
+(check-equal? (~d "yyyy-MM-dd HH:mm" "2025-01-15T09:30") "2025-01-15 09:30")
+(check-equal? (~d "HH:mm xxx" "2025-01-15 09:30+05:30") "09:30 +05:30")
 
 ;; ---------------------------------------------------------------------------
 ;; Path pattern predicates and format-output-path (exported from camp)

@@ -105,7 +105,7 @@
   (define all-brackets (regexp-match* #rx"\\[([^][]+)\\]" pattern #:match-select cadr))
   (for/list ([b (in-list all-brackets)]
              #:unless (with-handlers ([exn? (λ (_) #f)])
-                        (~t (date 2025 1 15) b)
+                        (~t (moment 2025 1 15 #:tz 0) b)
                         #t))
     b))
 
